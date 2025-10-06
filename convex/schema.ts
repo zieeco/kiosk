@@ -16,7 +16,7 @@ const applicationTables = {
     workEmail: v.optional(v.string()),
     phone: v.optional(v.string()),
     role: v.optional(v.string()),
-    location: v.optional(v.string()),
+    locations: v.optional(v.array(v.string())),
     onboardedBy: v.optional(v.id("users")),
     onboardedAt: v.optional(v.number()),
     inviteToken: v.optional(v.string()),

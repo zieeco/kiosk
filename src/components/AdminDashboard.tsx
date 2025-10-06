@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/no-misused-promises */
+
 import React, { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
@@ -16,7 +18,7 @@ export default function AdminDashboard() {
   const [employeeName, setEmployeeName] = useState("");
   const [employeeEmail, setEmployeeEmail] = useState("");
   const [employeeRole, setEmployeeRole] = useState("staff");
-  const [employeeLocation, setEmployeeLocation] = useState("");
+  const [employeeLocations, setEmployeeLocations] = useState<string[]>([]);
 
   // Broadcast form state
   const [broadcastMsg, setBroadcastMsg] = useState("");
@@ -24,6 +26,7 @@ export default function AdminDashboard() {
   const addResident = useMutation(api.people.addResident);
   const onboardEmployee = useMutation(api.people.onboardEmployee);
   const broadcastMessage = useMutation(api.people.broadcastMessage);
+  const locations = useQuery(api.employees.getAvailableLocations) || [];
 
   const [residentLoading, setResidentLoading] = useState(false);
   const [employeeLoading, setEmployeeLoading] = useState(false);
@@ -141,7 +144,7 @@ export default function AdminDashboard() {
       {showResidentModal && (
         <Modal onClose={() => setShowResidentModal(false)} title="Add New Resident">
           <form
-            onSubmit={async (e) => {
+            onSubmit={async (e: React.FormEvent) => {
               e.preventDefault();
               setResidentLoading(true);
               try {
@@ -161,8 +164,9 @@ export default function AdminDashboard() {
             className="space-y-4"
           >
             <div>
-              <label className="block text-sm font-medium text-gray-700">Name</label>
+              <label className="block text-sm font-medium text-gray-700" htmlFor="resident-name">Name</label>
               <input
+                id="resident-name"
                 className="w-full px-3 py-2 border border-gray-300 rounded"
                 value={residentName}
                 onChange={e => setResidentName(e.target.value)}
@@ -170,17 +174,24 @@ export default function AdminDashboard() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700">Location</label>
-              <input
+              <label className="block text-sm font-medium text-gray-700" htmlFor="resident-location">Location</label>
+              <select
+                id="resident-location"
                 className="w-full px-3 py-2 border border-gray-300 rounded"
                 value={residentLocation}
                 onChange={e => setResidentLocation(e.target.value)}
                 required
-              />
+              >
+                <option value="" disabled>Select location</option>
+                {locations.map(loc => (
+                  <option key={loc} value={loc}>{loc}</option>
+                ))}
+              </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700">Date of Birth</label>
+              <label className="block text-sm font-medium text-gray-700" htmlFor="resident-dob">Date of Birth</label>
               <input
+                id="resident-dob"
                 type="date"
                 className="w-full px-3 py-2 border border-gray-300 rounded"
                 value={residentDob}
@@ -212,7 +223,7 @@ export default function AdminDashboard() {
       {showEmployeeModal && (
         <Modal onClose={() => setShowEmployeeModal(false)} title="Onboard Employee">
           <form
-            onSubmit={async (e) => {
+            onSubmit={async (e: React.FormEvent) => {
               e.preventDefault();
               setEmployeeLoading(true);
               try {
@@ -220,12 +231,12 @@ export default function AdminDashboard() {
                   name: employeeName,
                   email: employeeEmail,
                   role: employeeRole,
-                  location: employeeLocation,
+                  locations: employeeLocations,
                 });
                 setEmployeeName("");
                 setEmployeeEmail("");
                 setEmployeeRole("staff");
-                setEmployeeLocation("");
+                setEmployeeLocations([]);
                 setShowEmployeeModal(false);
               } finally {
                 setEmployeeLoading(false);
@@ -234,8 +245,9 @@ export default function AdminDashboard() {
             className="space-y-4"
           >
             <div>
-              <label className="block text-sm font-medium text-gray-700">Name</label>
+              <label className="block text-sm font-medium text-gray-700" htmlFor="employee-name">Name</label>
               <input
+                id="employee-name"
                 className="w-full px-3 py-2 border border-gray-300 rounded"
                 value={employeeName}
                 onChange={e => setEmployeeName(e.target.value)}
@@ -243,8 +255,9 @@ export default function AdminDashboard() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700">Email</label>
+              <label className="block text-sm font-medium text-gray-700" htmlFor="employee-email">Email</label>
               <input
+                id="employee-email"
                 type="email"
                 className="w-full px-3 py-2 border border-gray-300 rounded"
                 value={employeeEmail}
@@ -253,8 +266,9 @@ export default function AdminDashboard() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700">Role</label>
+              <label className="block text-sm font-medium text-gray-700" htmlFor="employee-role">Role</label>
               <select
+                id="employee-role"
                 className="w-full px-3 py-2 border border-gray-300 rounded"
                 value={employeeRole}
                 onChange={e => setEmployeeRole(e.target.value)}
@@ -265,13 +279,19 @@ export default function AdminDashboard() {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700">Location</label>
-              <input
+              <label className="block text-sm font-medium text-gray-700" htmlFor="employee-location-select">Location</label>
+              <select
+                id="employee-location-select"
                 className="w-full px-3 py-2 border border-gray-300 rounded"
-                value={employeeLocation}
-                onChange={e => setEmployeeLocation(e.target.value)}
+                value={employeeLocations.length > 0 ? employeeLocations[0] : ""}
+                onChange={e => setEmployeeLocations(e.target.value ? [e.target.value] : [])}
                 required
-              />
+              >
+                <option value="" disabled>Select a location</option>
+                {locations.map(loc => (
+                  <option key={loc} value={loc}>{loc}</option>
+                ))}
+              </select>
             </div>
             <div className="flex justify-end gap-2">
               <button
@@ -298,7 +318,7 @@ export default function AdminDashboard() {
       {showBroadcastModal && (
         <Modal onClose={() => setShowBroadcastModal(false)} title="Broadcast Message">
           <form
-            onSubmit={async (e) => {
+            onSubmit={async (e: React.FormEvent) => {
               e.preventDefault();
               setBroadcastLoading(true);
               try {
@@ -312,8 +332,9 @@ export default function AdminDashboard() {
             className="space-y-4"
           >
             <div>
-              <label className="block text-sm font-medium text-gray-700">Message</label>
+              <label className="block text-sm font-medium text-gray-700" htmlFor="broadcast-message">Message</label>
               <textarea
+                id="broadcast-message"
                 className="w-full px-3 py-2 border border-gray-300 rounded"
                 value={broadcastMsg}
                 onChange={e => setBroadcastMsg(e.target.value)}

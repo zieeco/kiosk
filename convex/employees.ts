@@ -13,7 +13,7 @@ export const listEmployees = query({
       workEmail: emp.workEmail || emp.email || "",
       phone: emp.phone ?? "",
       roles: [emp.role || "staff"],
-      locations: [emp.location || "Main"],
+      locations: emp.locations || ["Main"],
       employmentStatus: emp.employmentStatus || "active",
       invitedAt: emp.invitedAt ?? null,
       hasAcceptedInvite: emp.hasAcceptedInvite ?? false,
@@ -25,8 +25,16 @@ export const listEmployees = query({
 export const getAvailableLocations = query({
   args: {},
   handler: async (ctx) => {
-    // Return a static list for demo
-    return ["Main", "North", "South", "East", "West"];
+    const residents = await ctx.db.query("residents").collect();
+    const kiosk = await ctx.db.query("kiosks").collect();
+
+    const residentLocations = residents.map((r) => r.location);
+    const kioskLocations = kiosk.map((k) => k.location);
+
+    const allLocations = [...residentLocations, ...kioskLocations];
+    const uniqueLocations = Array.from(new Set(allLocations));
+
+    return uniqueLocations;
   },
 });
 
@@ -69,7 +77,7 @@ export const getInviteDetails = query({
       employeeName: employee.name,
       workEmail: employee.workEmail || employee.email || "",
       role: employee.role || "staff",
-      location: employee.location || "Main",
+      location: employee.locations?.[0] || "Main",
       expired,
       status,
     };

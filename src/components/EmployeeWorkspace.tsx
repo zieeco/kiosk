@@ -25,7 +25,7 @@ export default function EmployeeWorkspace() {
   const [addName, setAddName] = useState("");
   const [addEmail, setAddEmail] = useState("");
   const [addRole, setAddRole] = useState("staff");
-  const [addLocation, setAddLocation] = useState("");
+  const [addLocations, setAddLocations] = useState<string[]>([]);
   const [addLoading, setAddLoading] = useState(false);
 
   const employees = useQuery(api.employees.listEmployees) || [];
@@ -84,12 +84,12 @@ export default function EmployeeWorkspace() {
         name: addName,
         email: addEmail,
         role: addRole,
-        location: addLocation,
+        locations: addLocations,
       });
       setAddName("");
       setAddEmail("");
       setAddRole("staff");
-      setAddLocation("");
+      setAddLocations([]);
       setShowAddModal(false);
     } catch (err) {
       alert("Failed to add employee: " + (err as Error).message);
@@ -350,13 +350,19 @@ export default function EmployeeWorkspace() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700">Location</label>
-                <input
+                <label className="block text-sm font-medium text-gray-700" htmlFor="add-location-select">Location</label>
+                <select
+                  id="add-location-select"
                   className="w-full px-3 py-2 border border-gray-300 rounded"
-                  value={addLocation}
-                  onChange={e => setAddLocation(e.target.value)}
+                  value={addLocations.length > 0 ? addLocations[0] : ""}
+                  onChange={e => setAddLocations(e.target.value ? [e.target.value] : [])}
                   required
-                />
+                >
+                  <option value="" disabled>Select a location</option>
+                  {locations.map(loc => (
+                    <option key={loc} value={loc}>{loc}</option>
+                  ))}
+                </select>
               </div>
               <div className="flex justify-end gap-2">
                 <button

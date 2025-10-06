@@ -29,9 +29,9 @@ export const onboardEmployee = mutation({
     name: v.string(),
     email: v.string(),
     role: v.string(),
-    location: v.string(),
+    locations: v.array(v.string()),
   },
-  handler: async (ctx, { name, email, role, location }) => {
+  handler: async (ctx, { name, email, role, locations }) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
     // Generate secure invite token and expiration
@@ -41,7 +41,7 @@ export const onboardEmployee = mutation({
       name,
       email,
       role,
-      location,
+      locations,
       onboardedBy: userId,
       onboardedAt: Date.now(),
       inviteToken: token,
