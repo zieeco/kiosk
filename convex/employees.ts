@@ -1,109 +1,125 @@
-import { query, mutation } from "./_generated/server";
+// convex/employees.ts
+import { action, mutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
+import { createAccount } from "@convex-dev/auth/server";
+import { api } from "./_generated/api";
 
-// List employees with all fields expected by the frontend
-export const listEmployees = query({
-  args: {},
-  handler: async (ctx) => {
-    const employees = await ctx.db.query("employees").collect();
-    // Return all fields, and mock roles/locations/status for demo
-    return employees.map((emp) => ({
-      id: emp._id,
-      name: emp.name,
-      workEmail: emp.workEmail || emp.email || "",
-      phone: emp.phone ?? "",
-      roles: [emp.role || "staff"],
-      locations: emp.locations || ["Main"],
-      employmentStatus: emp.employmentStatus || "active",
-      invitedAt: emp.invitedAt ?? null,
-      hasAcceptedInvite: emp.hasAcceptedInvite ?? false,
-    }));
-  },
-});
-
-// Get available locations (mocked for now)
-export const getAvailableLocations = query({
-  args: {},
-  handler: async (ctx) => {
-    const residents = await ctx.db.query("residents").collect();
-    const kiosk = await ctx.db.query("kiosks").collect();
-
-    const residentLocations = residents.map((r) => r.location);
-    const kioskLocations = kiosk.map((k) => k.location);
-
-    const allLocations = [...residentLocations, ...kioskLocations];
-    const uniqueLocations = Array.from(new Set(allLocations));
-
-    return uniqueLocations;
-  },
-});
-
-// Bulk assign employees (mock, does nothing)
-export const bulkAssignEmployees = mutation({
+/**
+ * INTERNAL QUERY expected by emails.ts / emailsSMTP.ts:
+ * Accepts either { employeeId } OR { email } (or both).
+ * We normalize the returned object so role/locations are always defined.
+ */
+export const getEmployeeForEmail = internalQuery({
   args: {
-    employeeIds: v.array(v.id("employees")),
-    addRoles: v.optional(v.array(v.string())),
-    removeRoles: v.optional(v.array(v.string())),
-    addLocations: v.optional(v.array(v.string())),
-    removeLocations: v.optional(v.array(v.string())),
+    // callers sometimes pass only employeeId; email is optional
+    email: v.optional(v.string()),
+    employeeId: v.optional(v.id("employees")),
+  },
+  handler: async (ctx, { email, employeeId }) => {
+    let emp: any | null = null;
+
+    // 1) Prefer an explicit employeeId if provided
+    if (employeeId) {
+      emp = await ctx.db.get(employeeId);
+    }
+
+    // 2) If no id or not found, try by email (workEmail then email)
+    if (!emp && email) {
+      const e = email.trim().toLowerCase();
+
+      emp = await ctx.db
+        .query("employees")
+        .filter((q) => q.eq(q.field("workEmail"), e))
+        .first();
+
+      if (!emp) {
+        emp = await ctx.db
+          .query("employees")
+          .filter((q) => q.eq(q.field("email"), e))
+          .first();
+      }
+    }
+
+    if (!emp) return null;
+
+    // Normalize fields so TS sees them as defined in emails.ts
+    const normalized = {
+      ...emp,
+      name: emp.name ?? emp.fullName ?? "",
+      role: (emp.role ?? "") as "" | "admin" | "supervisor" | "staff",
+      locations: (emp.locations ?? []) as string[],
+    };
+
+    return normalized;
+  },
+});
+
+/**
+ * Helper mutation: insert app-side employee + role records.
+ * Your employees table requires `name` and `workEmail`; it does NOT have `userId`.
+ */
+export const _insertEmployeeAndRole = mutation({
+  args: {
+    userId: v.id("users"), // used for roles table
+    fullName: v.string(),
+    email: v.string(),
+    role: v.union(v.literal("admin"), v.literal("supervisor"), v.literal("staff")),
+  },
+  handler: async (ctx, { userId, fullName, email, role }) => {
+    const e = email.trim().toLowerCase();
+
+    await ctx.db.insert("employees", {
+      name: fullName,     // required by your schema
+      workEmail: e,       // required by your schema
+      email: e,           // optional, if present in your schema
+      role,               // keep in employees for email templates
+      locations: [],      // ensure defined
+      createdAt: Date.now(),
+    });
+
+    await ctx.db.insert("roles", {
+      userId,
+      role,
+      locations: [],
+      assignedAt: Date.now(),
+    });
+
+    return true;
+  },
+});
+
+/**
+ * ACTION: createEmployeeAccount
+ * Creates a Convex Auth password account, then writes domain rows.
+ */
+export const createEmployeeAccount = action({
+  args: {
+    fullName: v.string(),
+    email: v.string(),
+    role: v.union(v.literal("admin"), v.literal("supervisor"), v.literal("staff")),
+    tempPassword: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    // No-op for demo, just return changed count
-    return { changed: args.employeeIds.length };
-  },
-});
+    const e = args.email.trim().toLowerCase();
 
-// Get invite details by token
-export const getInviteDetails = query({
-  args: { token: v.string() },
-  handler: async (ctx, { token }) => {
-    const employee = await ctx.db
-      .query("employees")
-      .filter((q) => q.eq(q.field("inviteToken"), token))
-      .first();
-    
-    if (!employee) return null;
-    
-    const expired = employee.inviteExpiresAt ? employee.inviteExpiresAt < Date.now() : false;
-    const alreadyAccepted = employee.hasAcceptedInvite ?? false;
-    
-    let status = "pending";
-    if (alreadyAccepted) status = "already_accepted";
-    else if (expired) status = "expired";
-    
-    return {
-      name: employee.name,
-      email: employee.workEmail || employee.email || "",
-      employeeName: employee.name,
-      workEmail: employee.workEmail || employee.email || "",
-      role: employee.role || "staff",
-      location: employee.locations?.[0] || "Main",
-      expired,
-      status,
-    };
-  },
-});
-
-// Accept invite
-export const acceptInvite = mutation({
-  args: { token: v.string() },
-  handler: async (ctx, { token }) => {
-    const employee = await ctx.db
-      .query("employees")
-      .filter((q) => q.eq(q.field("inviteToken"), token))
-      .first();
-    
-    if (!employee) throw new Error("Invalid invite token");
-    if (employee.inviteExpiresAt && employee.inviteExpiresAt < Date.now()) {
-      throw new Error("Invite has expired");
-    }
-    
-    await ctx.db.patch(employee._id, {
-      hasAcceptedInvite: true,
-      inviteToken: undefined,
-      inviteExpiresAt: undefined,
+    const { user } = await createAccount(ctx, {
+      provider: "password",
+      account: args.tempPassword
+        ? { id: e, secret: args.tempPassword } // raw password (library hashes)
+        : { id: e, secret: "" },               // set later via reset flow
+      profile: {
+        email: e,
+        name: args.fullName,
+      },
     });
-    
-    return true;
+
+    await ctx.runMutation(api.employees._insertEmployeeAndRole, {
+      userId: user._id,
+      fullName: args.fullName,
+      email: e,
+      role: args.role,
+    });
+
+    return { ok: true, userId: user._id };
   },
 });

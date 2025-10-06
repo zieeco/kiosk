@@ -18,8 +18,18 @@ const NAV_SECTIONS = [
     icon: "👤"
   },
   {
+    key: "locations",
+    label: "Locations",
+    icon: "📍"
+  },
+  {
+    key: "guardian-checklists",
+    label: "Guardian Checklists",
+    icon: "📋"
+  },
+  {
     key: "settings",
-    label: "App Setting",
+    label: "Settings",
     icon: "🔐"
   }
 ];
@@ -35,8 +45,19 @@ export default function Sidebar({
 }) {
   return (
     <aside className="w-64 bg-white border-r min-h-screen flex flex-col">
-      <div className="h-16 flex items-center justify-center border-b">
-        <span className="text-2xl font-bold text-primary">Chef Admin</span>
+      <div className="h-16 flex items-center justify-center border-b px-4">
+        {/* Replace the src below with your logo image path */}
+        <img 
+          src="/logo.png" 
+          alt="Admin Portal Logo" 
+          className="h-10 w-auto"
+          onError={(e) => {
+            // Fallback to text if logo image doesn't exist
+            e.currentTarget.style.display = 'none';
+            e.currentTarget.nextElementSibling?.classList.remove('hidden');
+          }}
+        />
+        <span className="text-2xl font-bold text-blue-600 hidden">Admin Portal</span>
       </div>
       <nav className="flex-1 py-4" role="navigation" aria-label="Main navigation">
         <ul className="flex flex-col">

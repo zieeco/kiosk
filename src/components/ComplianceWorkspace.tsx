@@ -2,13 +2,7 @@ import React, { useState, useMemo } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { Id } from "../../convex/_generated/dataModel";
-
-const TABS = [
-  { key: "overview", label: "Overview" },
-  { key: "isps", label: "ISPs" },
-  { key: "guardian-checklists", label: "Guardian Checklists" },
-  { key: "fire-evac-plans", label: "Fire Evac Plans" },
-];
+import { toast } from "sonner";
 
 type StatusType = "ok" | "due-soon" | "overdue";
 
@@ -21,48 +15,51 @@ const STATUS_COLORS: Record<StatusType, string> = {
 const STATUS_ORDER: Record<StatusType, number> = { overdue: 0, "due-soon": 1, ok: 2 };
 
 export default function ComplianceWorkspace() {
-  const [activeTab, setActiveTab] = useState("overview");
   const [filters, setFilters] = useState({
     location: "",
     itemType: "",
     status: "",
   });
   const [selectedItems, setSelectedItems] = useState<string[]>([]);
+  const [showISPWorkspace, setShowISPWorkspace] = useState<{
+    residentId: Id<"residents">;
+    residentName: string;
+  } | null>(null);
 
   const user = useQuery(api.auth.loggedInUser);
+  const userRole = useQuery(api.settings.getUserRole);
   const complianceData = useQuery(api.compliance.getComplianceOverview) || [];
-  const guardianLinks = useQuery(api.compliance.getGuardianChecklistLinks) || [];
-  const fireEvacPlans = useQuery(api.compliance.getFireEvacPlans) || [];
 
   const sendReminders = useMutation(api.compliance.sendComplianceReminders);
   const exportList = useMutation(api.compliance.exportComplianceList);
-  const resendGuardianLink = useMutation(api.compliance.resendGuardianLink);
 
-  // Get unique locations for filter
+  // Get unique locations for filter - only show locations user has access to
   const locations = useMemo(() => {
-    const allLocations = [
-      ...complianceData.map(item => item.location),
-      ...guardianLinks.map(link => link.location),
-      ...fireEvacPlans.map(plan => plan.location)
-    ];
-    return [...new Set(allLocations)].sort();
-  }, [complianceData, guardianLinks, fireEvacPlans]);
+    const allLocations = complianceData.map(item => item.location);
+    const uniqueLocations = [...new Set(allLocations)].sort();
+    
+    // If user is not admin, filter to only their assigned locations
+    if (userRole && userRole.role !== "admin" && userRole.locations) {
+      return uniqueLocations.filter(loc => userRole.locations?.includes(loc));
+    }
+    
+    return uniqueLocations;
+  }, [complianceData, userRole]);
 
   const handleBulkAction = async (action: string) => {
     if (selectedItems.length === 0) return;
-
     try {
       if (action === "send-reminders") {
         await sendReminders({ itemIds: selectedItems });
-        alert(`Reminders sent for ${selectedItems.length} items`);
+        toast.success(`Reminders sent for ${selectedItems.length} items`);
       } else if (action === "export") {
         await exportList({ itemIds: selectedItems });
-        alert(`Exported ${selectedItems.length} items`);
+        toast.success(`Exported ${selectedItems.length} items`);
       }
       setSelectedItems([]);
     } catch (error) {
       console.error("Bulk action failed:", error);
-      alert("Action failed. Please try again.");
+      toast.error("Action failed. Please try again.");
     }
   };
 
@@ -74,21 +71,6 @@ export default function ComplianceWorkspace() {
       return true;
     }).sort((a, b) => STATUS_ORDER[a.status as StatusType] - STATUS_ORDER[b.status as StatusType]);
   }, [complianceData, filters]);
-
-  const filteredGuardianLinks = useMemo(() => {
-    return guardianLinks.filter(link => {
-      if (filters.location && link.location !== filters.location) return false;
-      return true;
-    });
-  }, [guardianLinks, filters]);
-
-  const filteredFireEvacPlans = useMemo(() => {
-    return fireEvacPlans.filter(plan => {
-      if (filters.location && plan.location !== filters.location) return false;
-      if (filters.status && plan.status !== filters.status) return false;
-      return true;
-    }).sort((a, b) => STATUS_ORDER[a.status as StatusType] - STATUS_ORDER[b.status as StatusType]);
-  }, [fireEvacPlans, filters]);
 
   const renderOverview = () => (
     <div className="space-y-6">
@@ -219,6 +201,9 @@ export default function ComplianceWorkspace() {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Last Action
                 </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
@@ -258,81 +243,24 @@ export default function ComplianceWorkspace() {
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                     {item.lastAction}
                   </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {filteredComplianceData.length === 0 && (
-            <div className="text-center py-8 text-gray-500">
-              No compliance items found matching your filters.
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-
-  const renderGuardianChecklists = () => (
-    <div className="space-y-6">
-      <div className="bg-white rounded-lg shadow-sm border overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-200">
-          <h3 className="text-lg font-medium text-gray-900">Guardian Checklist Links</h3>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Location
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Template
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Status
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Sent Date
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Expires
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Actions
-                </th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {filteredGuardianLinks.map((link) => (
-                <tr key={link.id} className="hover:bg-gray-50">
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {link.location}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {link.templateName}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
-                      link.completed ? "text-green-600 bg-green-50" :
-                      link.expired ? "text-red-600 bg-red-50" :
-                      "text-yellow-600 bg-yellow-50"
-                    }`}>
-                      {link.completed ? "Completed" : link.expired ? "Expired" : "Pending"}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {new Date(link.sentDate).toLocaleDateString()}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {new Date(link.expiresAt).toLocaleDateString()}
-                  </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                    {!link.completed && (
+                    {item.type === "isp" && item.residentId && (
                       <button
-                        onClick={() => resendGuardianLink({ linkId: link.id as Id<"guardian_checklist_links"> })}
+                        onClick={() => setShowISPWorkspace({
+                          residentId: item.residentId as Id<"residents">,
+                          residentName: item.residentName || "Unknown Resident"
+                        })}
                         className="text-blue-600 hover:text-blue-900"
                       >
-                        Resend
+                        Manage ISP
+                      </button>
+                    )}
+                    {item.type === "fire_evac" && item.residentId && (
+                      <button
+                        onClick={() => window.location.href = `/residents?id=${item.residentId}`}
+                        className="text-green-600 hover:text-green-900"
+                      >
+                        Manage Fire Evac
                       </button>
                     )}
                   </td>
@@ -340,70 +268,19 @@ export default function ComplianceWorkspace() {
               ))}
             </tbody>
           </table>
-          {filteredGuardianLinks.length === 0 && (
-            <div className="text-center py-8 text-gray-500">
-              No guardian checklist links found.
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-
-  const renderFireEvacPlans = () => (
-    <div className="space-y-6">
-      <div className="bg-white rounded-lg shadow-sm border overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-200">
-          <h3 className="text-lg font-medium text-gray-900">Fire Evacuation Plans</h3>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Location
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Version
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Status
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Last Upload
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Next Due
-                </th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {filteredFireEvacPlans.map((plan) => (
-                <tr key={plan.id} className="hover:bg-gray-50">
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {plan.location}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    v{plan.version}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${STATUS_COLORS[plan.status as StatusType]}`}>
-                      {plan.status === "due-soon" ? "Due Soon" : plan.status === "overdue" ? "Overdue" : "OK"}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {new Date(plan.lastUpload).toLocaleDateString()}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {new Date(plan.nextDue).toLocaleDateString()}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {filteredFireEvacPlans.length === 0 && (
-            <div className="text-center py-8 text-gray-500">
-              No fire evacuation plans found.
+          {filteredComplianceData.length === 0 && (
+            <div className="text-center py-8">
+              <div className="text-4xl mb-4">📋</div>
+              <p className="text-gray-500 text-lg font-medium mb-2">
+                No compliance items found
+              </p>
+              <p className="text-gray-400 text-sm">
+                {complianceData.length === 0 
+                  ? userRole?.role === "admin" 
+                    ? "No compliance items exist yet. Add residents and ISPs to get started."
+                    : "No compliance items for your assigned locations yet."
+                  : "Try adjusting your filters to see more items."}
+              </p>
             </div>
           )}
         </div>
@@ -413,34 +290,18 @@ export default function ComplianceWorkspace() {
 
   return (
     <div className="space-y-6">
-      {/* Tab Navigation */}
-      <div className="border-b border-gray-200">
-        <nav className="flex space-x-8" aria-label="Tabs">
-          {TABS.map((tab) => (
-            <button
-              key={tab.key}
-              className={`py-4 px-1 border-b-2 font-medium text-sm ${
-                activeTab === tab.key
-                  ? "border-blue-500 text-blue-600"
-                  : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
-              }`}
-              onClick={() => setActiveTab(tab.key)}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </nav>
-      </div>
-
-      {/* Tab Content */}
-      {activeTab === "overview" && renderOverview()}
-      {activeTab === "isps" && (
-        <div className="text-center py-8 text-gray-500">
-          ISP management is available in the People workspace.
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900">Compliance Overview</h2>
+          <p className="text-gray-600">Monitor compliance status for ISPs, fire evacuation, and more</p>
+          {userRole && userRole.locations && userRole.locations.length > 0 && userRole.role !== "admin" && (
+            <p className="text-sm text-blue-600 mt-1">
+              📍 Viewing: {userRole.locations.join(", ")}
+            </p>
+          )}
         </div>
-      )}
-      {activeTab === "guardian-checklists" && renderGuardianChecklists()}
-      {activeTab === "fire-evac-plans" && renderFireEvacPlans()}
+      </div>
+      {renderOverview()}
     </div>
   );
 }

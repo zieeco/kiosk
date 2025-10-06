@@ -3,7 +3,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 
 export default function AdminAlertSchedule() {
-  const config = useQuery(api.kiosk.getConfig, {});
+  const config = useQuery(api.settings.getAppSettings, {});
   const setSchedule = useMutation(api.compliance.setAlertSchedule);
 
   const [weekday, setWeekday] = useState<number>(config?.alertWeekday ?? 1);

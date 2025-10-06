@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../convex/_generated/api";
 import { Id } from "../convex/_generated/dataModel";
@@ -7,25 +7,119 @@ import AutoLock from "./components/AutoLock";
 import QuickSignOut from "./components/QuickSignOut";
 import LocationBanner from "./components/LocationBanner";
 import ResidentCase from "./components/ResidentCase";
-
-// Simulate deviceId for kiosk (in real deployment, use a persistent device identifier)
-const deviceId = "kiosk-001"; // TODO: Replace with real device ID logic
+import KioskPairingScreen from "./components/KioskPairingScreen";
 
 export default function KioskSession({ children }: { children: React.ReactNode }) {
   const [locked, setLocked] = useState(false);
-  const [selfie, setSelfie] = useState<string | null>(null);
+  const [selfie, setSelfie] = useState<Id<"_storage"> | null>(null);
   const [selfieError, setSelfieError] = useState<string | null>(null);
+  const [deviceId, setDeviceId] = useState<string | null>(null);
+  const [isPaired, setIsPaired] = useState(false);
 
-  const kiosk = useQuery(api.kiosk.getKioskByDevice, { deviceId });
-  const config = useQuery(api.kiosk.getConfig, {});
-  const logAudit = useMutation(api.kiosk.logAudit);
+  // Check for existing pairing on mount
+  useEffect(() => {
+    const storedDeviceId = localStorage.getItem('kioskDeviceId');
+    if (storedDeviceId) {
+      setDeviceId(storedDeviceId);
+      setIsPaired(true);
+    }
+  }, []);
+
+  const kiosk = useQuery(api.kiosk.getKioskByDeviceId, deviceId ? { deviceId } : "skip");
+  const config = useQuery(api.settings.getAppSettings, {});
+  const updateLastSeen = useMutation(api.kiosk.updateKioskLastSeen);
+
+  // Update last seen periodically
+  useEffect(() => {
+    if (deviceId && kiosk?.isActive) {
+      const interval = setInterval(() => {
+        updateLastSeen({ deviceId });
+      }, 30000); // Every 30 seconds
+
+      return () => clearInterval(interval);
+    }
+  }, [deviceId, kiosk?.isActive, updateLastSeen]);
 
   // Simulate user session (replace with real user info)
   const user = useQuery(api.auth.loggedInUser);
+const userRole = useQuery(api.settings.getUserRole);
 
   // Resident selection for demo (in real app, this would be routed)
   const [selectedResidentId, setSelectedResidentId] = useState<Id<"residents"> | null>(null);
-  const residents = useQuery(api.kiosk.listResidents, {});
+  const residents = useQuery(api.people.listResidents, {});
+
+  // Show pairing screen if not paired
+  if (!isPaired || !deviceId) {
+    return (
+      <KioskPairingScreen
+        onPairingComplete={(deviceData) => {
+          setDeviceId(deviceData.deviceId);
+          setIsPaired(true);
+        }}
+      />
+    );
+  }
+
+  // Show loading state while kiosk data is being fetched
+  if (kiosk === undefined) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading kiosk information...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Check if kiosk is still active
+  if (kiosk === null) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <h1 className="text-2xl font-bold text-red-600 mb-4">Kiosk Not Found</h1>
+          <p className="text-gray-600 mb-4">This kiosk is not registered or has been removed.</p>
+          <button
+            onClick={() => {
+              localStorage.removeItem('kioskDeviceId');
+              localStorage.removeItem('kioskLocation');
+              localStorage.removeItem('kioskLabel');
+              setIsPaired(false);
+              setDeviceId(null);
+            }}
+            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
+          >
+            Re-pair Kiosk
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (kiosk && !kiosk.isActive) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <h1 className="text-2xl font-bold text-yellow-600 mb-4">Kiosk Disabled</h1>
+          <p className="text-gray-600">This kiosk has been disabled by an administrator.</p>
+          <p className="text-sm text-gray-500 mt-2">Contact support if you believe this is an error.</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Only allow staff, supervisor, or admin (or users without a role yet - they might be setting up)
+  if (userRole && userRole.role && !["staff", "supervisor", "admin"].includes(userRole.role)) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <h1 className="text-2xl font-bold text-red-600 mb-4">Not Authorized</h1>
+          <p className="text-gray-600">You do not have permission to use this kiosk.</p>
+          <p className="text-sm text-gray-500 mt-2">Only staff, supervisors, and admins can access kiosk mode.</p>
+        </div>
+      </div>
+    );
+  }
 
   // Selfie enforcement logic
   if (user && config && config.selfieEnforced && !selfie) {
@@ -33,16 +127,11 @@ export default function KioskSession({ children }: { children: React.ReactNode }
       <div className="flex flex-col items-center gap-4">
         <h2 className="text-2xl font-bold">Selfie Required</h2>
         <SelfieCapture
-          onCapture={async (dataUrl) => {
-            setSelfie(dataUrl);
-            await logAudit({
-              event: "selfie",
-              deviceId,
-              location: kiosk?.location ?? "unknown",
-              details: undefined,
-            });
+          onCapture={async (storageId: Id<"_storage">) => {
+            setSelfie(storageId);
+            // Log audit event would go here
           }}
-          onError={(err) => setSelfieError(err)}
+          onCancel={() => setSelfieError("Selfie capture cancelled")}
         />
         {selfieError && <div className="text-red-600">{selfieError}</div>}
       </div>
@@ -51,12 +140,6 @@ export default function KioskSession({ children }: { children: React.ReactNode }
 
   // Auto-lock on inactivity
   if (locked) {
-    logAudit({
-      event: "auto-lock",
-      deviceId,
-      location: kiosk?.location ?? "unknown",
-      details: undefined,
-    });
     return (
       <div className="flex flex-col items-center gap-4">
         <h2 className="text-2xl font-bold">Session Locked</h2>
@@ -84,10 +167,10 @@ export default function KioskSession({ children }: { children: React.ReactNode }
         ) : (
           <ul className="flex flex-wrap gap-2">
             {residents.map((r: any) => (
-              <li key={r._id}>
+              <li key={r.id}>
                 <button
-                  className={`px-2 py-1 rounded ${selectedResidentId === r._id ? "bg-blue-600 text-white" : "bg-gray-200"}`}
-                  onClick={() => setSelectedResidentId(r._id)}
+                  className={`px-2 py-1 rounded ${selectedResidentId === r.id ? "bg-blue-600 text-white" : "bg-gray-200"}`}
+                  onClick={() => setSelectedResidentId(r.id)}
                 >
                   {r.name}
                 </button>

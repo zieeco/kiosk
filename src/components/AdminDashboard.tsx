@@ -1,385 +1,294 @@
-/* eslint-disable @typescript-eslint/no-misused-promises */
-
-import React, { useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import React from "react";
+import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 
-export default function AdminDashboard() {
-  const [showResidentModal, setShowResidentModal] = useState(false);
-  const [showEmployeeModal, setShowEmployeeModal] = useState(false);
-  const [showBroadcastModal, setShowBroadcastModal] = useState(false);
-
-  // Resident form state
-  const [residentName, setResidentName] = useState("");
-  const [residentLocation, setResidentLocation] = useState("");
-  const [residentDob, setResidentDob] = useState("");
-
-  // Employee form state
-  const [employeeName, setEmployeeName] = useState("");
-  const [employeeEmail, setEmployeeEmail] = useState("");
-  const [employeeRole, setEmployeeRole] = useState("staff");
-  const [employeeLocations, setEmployeeLocations] = useState<string[]>([]);
-
-  // Broadcast form state
-  const [broadcastMsg, setBroadcastMsg] = useState("");
-
-  const addResident = useMutation(api.people.addResident);
-  const onboardEmployee = useMutation(api.people.onboardEmployee);
-  const broadcastMessage = useMutation(api.people.broadcastMessage);
-  const locations = useQuery(api.employees.getAvailableLocations) || [];
-
-  const [residentLoading, setResidentLoading] = useState(false);
-  const [employeeLoading, setEmployeeLoading] = useState(false);
-  const [broadcastLoading, setBroadcastLoading] = useState(false);
-
-  // --- The rest of the dashboard remains unchanged ---
-  const auditLogs = useQuery(api.settings.getAuditLogs, {}) || [];
-
-  return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-      {/* Main column */}
-      <div className="lg:col-span-2 space-y-8">
-        {/* Quick Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div className="bg-white p-4 rounded-lg shadow-sm border">
-            <h3 className="text-sm font-medium text-gray-500">Active Residents</h3>
-            <p className="mt-1 text-3xl font-semibold text-gray-900">32</p>
-          </div>
-          <div className="bg-white p-4 rounded-lg shadow-sm border">
-            <h3 className="text-sm font-medium text-gray-500">Active Staff</h3>
-            <p className="mt-1 text-3xl font-semibold text-gray-900">45</p>
-          </div>
-          <div className="bg-white p-4 rounded-lg shadow-sm border">
-            <h3 className="text-sm font-medium text-gray-500">Open Alerts</h3>
-            <p className="mt-1 text-3xl font-semibold text-red-600">3</p>
-          </div>
-          <div className="bg-white p-4 rounded-lg shadow-sm border">
-            <h3 className="text-sm font-medium text-gray-500">Kiosks Online</h3>
-            <p className="mt-1 text-3xl font-semibold text-green-600">8</p>
-          </div>
-        </div>
-
-        {/* Recent Activity */}
-        <div className="bg-white rounded-lg shadow-sm border">
-          <div className="p-4 border-b">
-            <h3 className="text-lg font-semibold">Recent Activity</h3>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Time</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actor</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Action</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Location</th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {auditLogs.slice(0, 10).map((log: any) => (
-                  <tr key={log.id}>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{new Date(log.timestamp).toLocaleTimeString()}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{log.actorName}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{log.event}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{log.location}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      {/* Side column */}
-      <div className="space-y-8">
-        {/* Quick Actions */}
-        <div className="bg-white rounded-lg shadow-sm border p-4">
-          <h3 className="text-lg font-semibold mb-4">Quick Actions</h3>
-          <div className="space-y-2">
-            <button
-              className="w-full bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-              onClick={() => setShowResidentModal(true)}
-            >
-              Add New Resident
-            </button>
-            <button
-              className="w-full bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
-              onClick={() => setShowEmployeeModal(true)}
-            >
-              Onboard Employee
-            </button>
-            <button
-              className="w-full bg-gray-200 text-gray-800 px-4 py-2 rounded hover:bg-gray-300"
-              onClick={() => setShowBroadcastModal(true)}
-            >
-              Broadcast Message
-            </button>
-          </div>
-        </div>
-
-        {/* System Status */}
-        <div className="bg-white rounded-lg shadow-sm border p-4">
-          <h3 className="text-lg font-semibold mb-4">System Status</h3>
-          <ul className="space-y-2 text-sm">
-            <li className="flex justify-between items-center">
-              <span>Convex Database</span>
-              <span className="font-semibold text-green-600">Operational</span>
-            </li>
-            <li className="flex justify-between items-center">
-              <span>Authentication</span>
-              <span className="font-semibold text-green-600">Operational</span>
-            </li>
-            <li className="flex justify-between items-center">
-              <span>Email Service</span>
-              <span className="font-semibold text-yellow-500">Degraded</span>
-            </li>
-            <li className="flex justify-between items-center">
-              <span>Kiosk Network</span>
-              <span className="font-semibold text-green-600">Operational</span>
-            </li>
-          </ul>
-        </div>
-      </div>
-
-      {/* Add Resident Modal */}
-      {showResidentModal && (
-        <Modal onClose={() => setShowResidentModal(false)} title="Add New Resident">
-          <form
-            onSubmit={async (e: React.FormEvent) => {
-              e.preventDefault();
-              setResidentLoading(true);
-              try {
-                await addResident({
-                  name: residentName,
-                  location: residentLocation,
-                  dob: residentDob || undefined,
-                });
-                setResidentName("");
-                setResidentLocation("");
-                setResidentDob("");
-                setShowResidentModal(false);
-              } finally {
-                setResidentLoading(false);
-              }
-            }}
-            className="space-y-4"
-          >
-            <div>
-              <label className="block text-sm font-medium text-gray-700" htmlFor="resident-name">Name</label>
-              <input
-                id="resident-name"
-                className="w-full px-3 py-2 border border-gray-300 rounded"
-                value={residentName}
-                onChange={e => setResidentName(e.target.value)}
-                required
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700" htmlFor="resident-location">Location</label>
-              <select
-                id="resident-location"
-                className="w-full px-3 py-2 border border-gray-300 rounded"
-                value={residentLocation}
-                onChange={e => setResidentLocation(e.target.value)}
-                required
-              >
-                <option value="" disabled>Select location</option>
-                {locations.map(loc => (
-                  <option key={loc} value={loc}>{loc}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700" htmlFor="resident-dob">Date of Birth</label>
-              <input
-                id="resident-dob"
-                type="date"
-                className="w-full px-3 py-2 border border-gray-300 rounded"
-                value={residentDob}
-                onChange={e => setResidentDob(e.target.value)}
-              />
-            </div>
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                className="px-4 py-2 bg-gray-200 rounded"
-                onClick={() => setShowResidentModal(false)}
-                disabled={residentLoading}
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="px-4 py-2 bg-blue-600 text-white rounded"
-                disabled={residentLoading}
-              >
-                {residentLoading ? "Adding..." : "Add Resident"}
-              </button>
-            </div>
-          </form>
-        </Modal>
-      )}
-
-      {/* Onboard Employee Modal */}
-      {showEmployeeModal && (
-        <Modal onClose={() => setShowEmployeeModal(false)} title="Onboard Employee">
-          <form
-            onSubmit={async (e: React.FormEvent) => {
-              e.preventDefault();
-              setEmployeeLoading(true);
-              try {
-                await onboardEmployee({
-                  name: employeeName,
-                  email: employeeEmail,
-                  role: employeeRole,
-                  locations: employeeLocations,
-                });
-                setEmployeeName("");
-                setEmployeeEmail("");
-                setEmployeeRole("staff");
-                setEmployeeLocations([]);
-                setShowEmployeeModal(false);
-              } finally {
-                setEmployeeLoading(false);
-              }
-            }}
-            className="space-y-4"
-          >
-            <div>
-              <label className="block text-sm font-medium text-gray-700" htmlFor="employee-name">Name</label>
-              <input
-                id="employee-name"
-                className="w-full px-3 py-2 border border-gray-300 rounded"
-                value={employeeName}
-                onChange={e => setEmployeeName(e.target.value)}
-                required
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700" htmlFor="employee-email">Email</label>
-              <input
-                id="employee-email"
-                type="email"
-                className="w-full px-3 py-2 border border-gray-300 rounded"
-                value={employeeEmail}
-                onChange={e => setEmployeeEmail(e.target.value)}
-                required
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700" htmlFor="employee-role">Role</label>
-              <select
-                id="employee-role"
-                className="w-full px-3 py-2 border border-gray-300 rounded"
-                value={employeeRole}
-                onChange={e => setEmployeeRole(e.target.value)}
-              >
-                <option value="staff">Staff</option>
-                <option value="supervisor">Supervisor</option>
-                <option value="admin">Admin</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700" htmlFor="employee-location-select">Location</label>
-              <select
-                id="employee-location-select"
-                className="w-full px-3 py-2 border border-gray-300 rounded"
-                value={employeeLocations.length > 0 ? employeeLocations[0] : ""}
-                onChange={e => setEmployeeLocations(e.target.value ? [e.target.value] : [])}
-                required
-              >
-                <option value="" disabled>Select a location</option>
-                {locations.map(loc => (
-                  <option key={loc} value={loc}>{loc}</option>
-                ))}
-              </select>
-            </div>
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                className="px-4 py-2 bg-gray-200 rounded"
-                onClick={() => setShowEmployeeModal(false)}
-                disabled={employeeLoading}
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="px-4 py-2 bg-blue-600 text-white rounded"
-                disabled={employeeLoading}
-              >
-                {employeeLoading ? "Onboarding..." : "Onboard"}
-              </button>
-            </div>
-          </form>
-        </Modal>
-      )}
-
-      {/* Broadcast Message Modal */}
-      {showBroadcastModal && (
-        <Modal onClose={() => setShowBroadcastModal(false)} title="Broadcast Message">
-          <form
-            onSubmit={async (e: React.FormEvent) => {
-              e.preventDefault();
-              setBroadcastLoading(true);
-              try {
-                await broadcastMessage({ message: broadcastMsg });
-                setBroadcastMsg("");
-                setShowBroadcastModal(false);
-              } finally {
-                setBroadcastLoading(false);
-              }
-            }}
-            className="space-y-4"
-          >
-            <div>
-              <label className="block text-sm font-medium text-gray-700" htmlFor="broadcast-message">Message</label>
-              <textarea
-                id="broadcast-message"
-                className="w-full px-3 py-2 border border-gray-300 rounded"
-                value={broadcastMsg}
-                onChange={e => setBroadcastMsg(e.target.value)}
-                rows={4}
-                required
-              />
-            </div>
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                className="px-4 py-2 bg-gray-200 rounded"
-                onClick={() => setShowBroadcastModal(false)}
-                disabled={broadcastLoading}
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="px-4 py-2 bg-blue-600 text-white rounded"
-                disabled={broadcastLoading}
-              >
-                {broadcastLoading ? "Sending..." : "Send"}
-              </button>
-            </div>
-          </form>
-        </Modal>
-      )}
-    </div>
-  );
+interface AdminDashboardProps {
+  onNavigate: (view: string) => void;
 }
 
-// Simple Modal component
-function Modal({ onClose, title, children }: { onClose: () => void; title: string; children: React.ReactNode }) {
+export default function AdminDashboard({ onNavigate }: AdminDashboardProps) {
+  const employees = useQuery(api.employees.listEmployees) || [];
+  const residents = useQuery(api.people.listResidents) || [];
+  const guardians = useQuery(api.people.listGuardians) || [];
+  const recentLogs = useQuery(api.admin.getRecentLogsForAdmin, { limit: 10 }) || [];
+
+  const stats = [
+    {
+      title: "Total Employees",
+      value: employees.length,
+      icon: "👥",
+      color: "bg-blue-50 text-blue-700 border-blue-200"
+    },
+    {
+      title: "Total Residents",
+      value: residents.length,
+      icon: "🏠",
+      color: "bg-green-50 text-green-700 border-green-200"
+    },
+    {
+      title: "Total Guardians",
+      value: guardians.length,
+      icon: "👨‍👩‍👧‍👦",
+      color: "bg-purple-50 text-purple-700 border-purple-200"
+    },
+    {
+      title: "Active Employees",
+      value: employees.filter(emp => emp.employmentStatus === "active").length,
+      icon: "✅",
+      color: "bg-green-50 text-green-700 border-green-200"
+    },
+    {
+      title: "Active Locations",
+      value: new Set([...employees.flatMap(emp => emp.locations), ...residents.map(res => res.location)]).size,
+      icon: "📍",
+      color: "bg-indigo-50 text-indigo-700 border-indigo-200"
+    }
+  ];
+
+  const recentEmployees = employees
+    .filter(emp => emp.onboardedAt)
+    .sort((a, b) => (b.onboardedAt || 0) - (a.onboardedAt || 0))
+    .slice(0, 5);
+
+  const recentResidents = residents
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+    .slice(0, 5);
+
+  const recentGuardians = guardians
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+    .slice(0, 3);
+
+  const formatLogContent = (content: string, template: string) => {
+    try {
+      const parsed = JSON.parse(content);
+      if (template === "daily_notes") {
+        return `Mood: ${parsed.mood || "N/A"}, Activities: ${parsed.activities || "N/A"}`;
+      } else if (template === "incident_report") {
+        return `${parsed.incident_type || "Incident"}: ${parsed.description || "No description"}`;
+      } else if (template === "medication_log") {
+        return `${parsed.medication || "Medication"} - ${parsed.dosage || "N/A"}`;
+      }
+      return content.substring(0, 100) + (content.length > 100 ? "..." : "");
+    } catch {
+      return content.substring(0, 100) + (content.length > 100 ? "..." : "");
+    }
+  };
+
+  const getTemplateIcon = (template: string) => {
+    switch (template) {
+      case "daily_notes": return "📝";
+      case "incident_report": return "⚠️";
+      case "medication_log": return "💊";
+      case "care_plan_update": return "📋";
+      default: return "📄";
+    }
+  };
+
+  const getTemplateColor = (template: string) => {
+    switch (template) {
+      case "daily_notes": return "bg-blue-100 text-blue-800";
+      case "incident_report": return "bg-red-100 text-red-800";
+      case "medication_log": return "bg-green-100 text-green-800";
+      case "care_plan_update": return "bg-purple-100 text-purple-800";
+      default: return "bg-gray-100 text-gray-800";
+    }
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-30">
-      <div className="bg-white rounded-lg shadow-lg w-full max-w-md mx-auto p-6 relative">
-        <button
-          className="absolute top-2 right-2 text-gray-400 hover:text-gray-600"
-          onClick={onClose}
-          aria-label="Close"
-        >
-          ×
-        </button>
-        <h2 className="text-xl font-semibold mb-4">{title}</h2>
-        {children}
+    <div className="space-y-8">
+      {/* Stats Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
+        {stats.map((stat, index) => (
+          <div key={index} className={`${stat.color} border-2 rounded-lg p-6`}>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium opacity-80">{stat.title}</p>
+                <p className="text-3xl font-bold mt-2">{stat.value}</p>
+              </div>
+              <div className="text-3xl">{stat.icon}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Recent Activity */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        {/* Recent Employee Invites */}
+        <div className="bg-white rounded-lg shadow-sm border">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <h3 className="text-lg font-semibold">Recent Employee Invites</h3>
+          </div>
+          <div className="p-6">
+            {recentEmployees.length === 0 ? (
+              <p className="text-gray-500 text-center py-4">No recent employee invites</p>
+            ) : (
+              <div className="space-y-4">
+                {recentEmployees.map((employee) => (
+                  <div key={employee.id} className="flex items-center justify-between">
+                    <div>
+                      <p className="font-medium">{employee.name}</p>
+                      <p className="text-sm text-gray-500">{employee.workEmail}</p>
+                    </div>
+                    <div className="text-right">
+                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                        employee.employmentStatus === "active"
+                          ? "bg-green-100 text-green-800" 
+                          : "bg-gray-100 text-gray-800"
+                      }`}>
+                        {employee.employmentStatus === "active" ? "Active" : "Inactive"}
+                      </span>
+                      <p className="text-xs text-gray-500 mt-1">
+                        {employee.onboardedAt ? new Date(employee.onboardedAt).toLocaleDateString() : ""}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Recent Activity Logs */}
+        <div className="bg-white rounded-lg shadow-sm border">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <h3 className="text-lg font-semibold">Recent Care Logs</h3>
+          </div>
+          <div className="p-6">
+            {recentLogs.length === 0 ? (
+              <p className="text-gray-500 text-center py-4">No recent care logs</p>
+            ) : (
+              <div className="space-y-4">
+                {recentLogs.slice(0, 5).map((log) => (
+                  <div key={log.id} className="border-l-4 border-blue-200 pl-4">
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-lg">{getTemplateIcon(log.template || "")}</span>
+                          <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${getTemplateColor(log.template || "")}`}>
+                            {log.template?.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) || "Unknown"}
+                          </span>
+                        </div>
+                        <p className="font-medium text-sm">{log.residentName}</p>
+                        <p className="text-xs text-gray-600 mb-2">{log.residentLocation}</p>
+                        <p className="text-sm text-gray-700">
+                          {formatLogContent(log.content, log.template || "")}
+                        </p>
+                      </div>
+                      <div className="text-right ml-4">
+                        <p className="text-xs text-gray-500">
+                          {log.authorName}
+                        </p>
+                        <p className="text-xs text-gray-400">
+                          {new Date(log.createdAt).toLocaleDateString()}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Recent Residents */}
+        <div className="bg-white rounded-lg shadow-sm border">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <h3 className="text-lg font-semibold">Recent Residents</h3>
+          </div>
+          <div className="p-6">
+            {recentResidents.length === 0 ? (
+              <p className="text-gray-500 text-center py-4">No residents added yet</p>
+            ) : (
+              <div className="space-y-4">
+                {recentResidents.map((resident) => (
+                  <div key={resident.id} className="flex items-center justify-between">
+                    <div>
+                      <p className="font-medium">{resident.name}</p>
+                      <p className="text-sm text-gray-500">{resident.location}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm text-gray-900">
+                        {resident.createdAt ? new Date(resident.createdAt).toLocaleDateString() : ""}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Recent Guardians */}
+        <div className="bg-white rounded-lg shadow-sm border">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <h3 className="text-lg font-semibold">Recent Guardians</h3>
+          </div>
+          <div className="p-6">
+            {recentGuardians.length === 0 ? (
+              <p className="text-gray-500 text-center py-4">No guardians added yet</p>
+            ) : (
+              <div className="space-y-4">
+                {recentGuardians.map((guardian) => (
+                  <div key={guardian.id} className="flex items-center justify-between">
+                    <div>
+                      <p className="font-medium">{guardian.name}</p>
+                      <p className="text-sm text-gray-500">
+                        {guardian.residentIds && guardian.residentIds.length > 0 
+                          ? `${guardian.residentIds.length} resident(s)`
+                          : "No residents assigned"
+                        }
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm text-gray-900">
+                        {guardian.createdAt ? new Date(guardian.createdAt).toLocaleDateString() : ""}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Quick Actions */}
+      <div className="bg-white rounded-lg shadow-sm border p-6">
+        <h3 className="text-lg font-semibold mb-4">Quick Actions</h3>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <button 
+            onClick={() => onNavigate("people")}
+            className="p-4 border-2 border-dashed border-gray-300 rounded-lg hover:border-blue-400 hover:bg-blue-50 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+          >
+            <div className="text-2xl mb-2">👥</div>
+            <p className="font-medium">Add Employee</p>
+            <p className="text-sm text-gray-500">Invite new team member</p>
+          </button>
+          <button 
+            onClick={() => onNavigate("people")}
+            className="p-4 border-2 border-dashed border-gray-300 rounded-lg hover:border-green-400 hover:bg-green-50 transition-colors focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
+          >
+            <div className="text-2xl mb-2">🏠</div>
+            <p className="font-medium">Add Resident</p>
+            <p className="text-sm text-gray-500">Register new resident</p>
+          </button>
+          <button 
+            onClick={() => onNavigate("people")}
+            className="p-4 border-2 border-dashed border-gray-300 rounded-lg hover:border-purple-400 hover:bg-purple-50 transition-colors focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+          >
+            <div className="text-2xl mb-2">👨‍👩‍👧‍👦</div>
+            <p className="font-medium">Add Guardian</p>
+            <p className="text-sm text-gray-500">Register guardian contact</p>
+          </button>
+          <button 
+            onClick={() => onNavigate("settings")}
+            className="p-4 border-2 border-dashed border-gray-300 rounded-lg hover:border-indigo-400 hover:bg-indigo-50 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+          >
+            <div className="text-2xl mb-2">⚙️</div>
+            <p className="font-medium">System Settings</p>
+            <p className="text-sm text-gray-500">Configure application</p>
+          </button>
+        </div>
       </div>
     </div>
   );

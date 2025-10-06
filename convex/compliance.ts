@@ -24,30 +24,37 @@ export const internalListResidents = internalQuery({
   },
 });
 
-// Internal: List all ISPs for a resident (no auth)
-export const internalListResidentIsps = internalQuery({
+// Internal: List all ISP files for a resident (no auth)
+export const internalListResidentISPFiles = internalQuery({
   args: { residentId: v.id("residents") },
   handler: async (ctx, { residentId }) => {
     return await ctx.db
-      .query("isp")
-      .withIndex("by_resident", (q) => q.eq("residentId", residentId))
-      .order("desc")
+      .query("isp_files")
+      .withIndex("by_residentId", (q) => q.eq("residentId", residentId))
       .collect();
   },
 });
 
-// Internal: List latest fire evac per location (no auth)
+// Internal: List latest fire evac per resident (no auth)
 export const internalListLatestFireEvac = internalQuery({
   args: {},
   handler: async (ctx) => {
-    const all = await ctx.db.query("fire_evac").order("desc").collect();
-    const byLoc: Record<string, any> = {};
-    for (const fe of all) {
-      if (!byLoc[fe.location] || fe.version > byLoc[fe.location].version) {
-        byLoc[fe.location] = fe;
+    const residents = await ctx.db.query("residents").collect();
+    const result = [];
+    
+    for (const resident of residents) {
+      const plans = await ctx.db
+        .query("fire_evac")
+        .withIndex("by_residentId", (q) => q.eq("residentId", resident._id))
+        .order("desc")
+        .take(1);
+      
+      if (plans.length > 0) {
+        result.push({ ...plans[0], residentName: resident.name });
       }
     }
-    return Object.values(byLoc);
+    
+    return result;
   },
 });
 
@@ -74,13 +81,14 @@ export const internalCreateAlert = internalMutation({
   handler: async (ctx, { type, location, dueAt, details }) => {
     await ctx.db.insert("compliance_alerts", {
       type,
+      title: `${type} alert`,
+      description: details || `${type} alert for ${location}`,
       location,
-      dueAt,
+      status: "active",
+      severity: "medium",
       active: true,
       createdAt: Date.now(),
-      details,
     });
-    // No PHI in details
     return true;
   },
 });
@@ -114,16 +122,14 @@ export const listActiveAlerts = query({
   handler: async (ctx) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
-    // Get user role/locations
     const role = await ctx.db.query("roles").withIndex("by_userId", (q) => q.eq("userId", userId)).unique();
     if (!role) return [];
     const locations = role.locations ?? [];
-    // Show all active alerts for user's locations
     return await ctx.db
       .query("compliance_alerts")
       .order("desc")
       .collect()
-      .then(alerts => alerts.filter(a => a.active && locations.includes(a.location)));
+      .then(alerts => alerts.filter(a => a.active && a.location && locations.includes(a.location)));
   },
 });
 
@@ -149,7 +155,6 @@ export const setAlertSchedule = mutation({
     if (!userId) throw new Error("Not authenticated");
     const role = await ctx.db.query("roles").withIndex("by_userId", (q) => q.eq("userId", userId)).unique();
     if (!role || role.role !== "admin") throw new Error("Forbidden");
-    // Update config (assume single config row)
     const config = await ctx.db.query("config").first();
     if (config) {
       await ctx.db.patch(config._id, { alertWeekday: weekday, alertHour: hour, alertMinute: minute });
@@ -159,27 +164,39 @@ export const setAlertSchedule = mutation({
   },
 });
 
-// Mutation: Admin uploads Fire Evac plan (sets due +12mo, versioned)
-export const uploadFireEvac = mutation({
-  args: { location: v.string(), fileId: v.string() },
-  handler: async (ctx, { location, fileId }) => {
+// Mutation: Generate upload URL for fire evac plan
+export const generateFireEvacUploadUrl = mutation({
+  args: {},
+  handler: async (ctx) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
     const role = await ctx.db.query("roles").withIndex("by_userId", (q) => q.eq("userId", userId)).unique();
-    if (!role || role.role !== "admin") throw new Error("Forbidden");
-    // Get latest version
-    const latest = await ctx.db.query("fire_evac").withIndex("by_location", (q) => q.eq("location", location)).order("desc").take(1);
-    const version = latest.length > 0 ? latest[0].version + 1 : 1;
-    const dueAt = Date.now() + 1000 * 60 * 60 * 24 * 365; // +12mo
-    await ctx.db.insert("fire_evac", {
-      location,
-      uploadedBy: userId,
-      uploadedAt: Date.now(),
-      version,
-      dueAt,
-    });
-    await audit(ctx, "upload_fire_evac", userId, `location=${location},fileId=${fileId}`);
-    return true;
+    if (!role || (role.role !== "admin" && role.role !== "supervisor")) {
+      throw new Error("Forbidden: Only admins and supervisors can upload fire evacuation plans");
+    }
+    return await ctx.storage.generateUploadUrl();
+  },
+});
+
+// Mutation: Admin/Supervisor uploads Fire Evac plan (DEPRECATED - use fireEvac.ts)
+export const uploadFireEvac = mutation({
+  args: { 
+    location: v.string(), 
+    fileStorageId: v.id("_storage"),
+    fileName: v.string(),
+    fileSize: v.number(),
+    contentType: v.string(),
+    notes: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const role = await ctx.db.query("roles").withIndex("by_userId", (q) => q.eq("userId", userId)).unique();
+    if (!role || (role.role !== "admin" && role.role !== "supervisor")) {
+      throw new Error("Forbidden: Only admins and supervisors can upload fire evacuation plans");
+    }
+    
+    throw new Error("DEPRECATED: Use fireEvac.saveResidentFireEvacPlan instead");
   },
 });
 
@@ -187,10 +204,8 @@ export const uploadFireEvac = mutation({
 export const setIspDueDate = mutation({
   args: { residentId: v.id("residents"), ispId: v.id("isp") },
   handler: async (ctx, { residentId, ispId }) => {
-    // Set dueAt +6mo
     const dueAt = Date.now() + 1000 * 60 * 60 * 24 * 30 * 6;
     await ctx.db.patch(ispId, { dueAt });
-    // Optionally, audit here if needed
     return true;
   },
 });
@@ -208,23 +223,29 @@ export const getComplianceOverview = query({
     const userLocations = role.locations ?? [];
     const isAdmin = role.role === "admin";
     
+    if (!isAdmin && userLocations.length === 0) {
+      return [];
+    }
+    
     const items = [];
     
-    // Get ISP items
-    const residents = await ctx.db.query("residents").collect();
-    const filteredResidents = isAdmin ? residents : residents.filter(r => userLocations.includes(r.location));
+    // Get ISP items from new isp_files table - filter by user's locations
+    const allResidents = await ctx.db.query("residents").collect();
+    const filteredResidents = isAdmin 
+      ? allResidents 
+      : allResidents.filter(r => userLocations.includes(r.location));
     
     for (const resident of filteredResidents) {
-      const isps = await ctx.db
-        .query("isp")
-        .withIndex("by_resident", (q) => q.eq("residentId", resident._id))
-        .order("desc")
+      const ispFiles = await ctx.db
+        .query("isp_files")
+        .withIndex("by_residentId", (q) => q.eq("residentId", resident._id))
         .collect();
       
-      const currentIsp = isps.find(i => i.published);
-      if (currentIsp && currentIsp.dueAt) {
+      const activeISP = ispFiles.find(f => f.status === "active");
+      if (activeISP) {
+        const dueDate = activeISP.effectiveDate + (6 * 30 * 24 * 60 * 60 * 1000);
         const now = Date.now();
-        const daysUntilDue = Math.ceil((currentIsp.dueAt - now) / (1000 * 60 * 60 * 24));
+        const daysUntilDue = Math.ceil((dueDate - now) / (1000 * 60 * 60 * 24));
         
         let status = "ok";
         if (daysUntilDue < 0) status = "overdue";
@@ -234,45 +255,75 @@ export const getComplianceOverview = query({
           id: `isp-${resident._id}`,
           location: resident.location,
           type: "isp",
-          itemName: "Individual Service Plan",
-          description: `Location: ${resident.location}`,
-          dueDate: currentIsp.dueAt,
+          itemName: `ISP - ${resident.name}`,
+          description: `${activeISP.versionLabel}`,
+          dueDate,
           status,
-          lastAction: `Updated ${new Date(currentIsp.createdAt).toLocaleDateString()}`,
+          lastAction: `Activated ${new Date(activeISP.activatedAt || activeISP.uploadedAt).toLocaleDateString()}`,
+          residentId: resident._id,
+          residentName: resident.name,
+        });
+      } else if (ispFiles.length === 0) {
+        items.push({
+          id: `isp-${resident._id}`,
+          location: resident.location,
+          type: "isp",
+          itemName: `ISP - ${resident.name}`,
+          description: "No ISP on file",
+          dueDate: Date.now(),
+          status: "overdue",
+          lastAction: "Never uploaded",
+          residentId: resident._id,
+          residentName: resident.name,
         });
       }
     }
     
-    // Get Fire Evac items
-    const fireEvacs = await ctx.db.query("fire_evac").collect();
-    const latestByLocation: Record<string, any> = {};
-    
-    for (const fe of fireEvacs) {
-      if (!latestByLocation[fe.location] || fe.version > latestByLocation[fe.location].version) {
-        latestByLocation[fe.location] = fe;
+    // Get Fire Evac items - now per resident
+    for (const resident of filteredResidents) {
+      const fireEvacPlans = await ctx.db
+        .query("fire_evac")
+        .withIndex("by_residentId", (q) => q.eq("residentId", resident._id))
+        .order("desc")
+        .take(1);
+      
+      const latestPlan = fireEvacPlans[0];
+      
+      if (latestPlan) {
+        const dueDate = (latestPlan.createdAt || Date.now()) + (365 * 24 * 60 * 60 * 1000);
+        const now = Date.now();
+        const daysUntilDue = Math.ceil((dueDate - now) / (1000 * 60 * 60 * 24));
+        
+        let status = "ok";
+        if (daysUntilDue < 0) status = "overdue";
+        else if (daysUntilDue <= 30) status = "due-soon";
+        
+        items.push({
+          id: `fire-evac-${resident._id}`,
+          location: resident.location,
+          type: "fire_evac",
+          itemName: `Fire Evac - ${resident.name}`,
+          description: `Version ${latestPlan.version}`,
+          dueDate,
+          status,
+          lastAction: `Uploaded ${new Date(latestPlan.createdAt || Date.now()).toLocaleDateString()}`,
+          residentId: resident._id,
+          residentName: resident.name,
+        });
+      } else {
+        items.push({
+          id: `fire-evac-${resident._id}`,
+          location: resident.location,
+          type: "fire_evac",
+          itemName: `Fire Evac - ${resident.name}`,
+          description: "No plan on file",
+          dueDate: Date.now(),
+          status: "overdue",
+          lastAction: "Never uploaded",
+          residentId: resident._id,
+          residentName: resident.name,
+        });
       }
-    }
-    
-    for (const [location, plan] of Object.entries(latestByLocation)) {
-      if (!isAdmin && !userLocations.includes(location)) continue;
-      
-      const now = Date.now();
-      const daysUntilDue = Math.ceil((plan.dueAt - now) / (1000 * 60 * 60 * 24));
-      
-      let status = "ok";
-      if (daysUntilDue < 0) status = "overdue";
-      else if (daysUntilDue <= 30) status = "due-soon";
-      
-      items.push({
-        id: `fire-evac-${plan._id}`,
-        location,
-        type: "fire_evac",
-        itemName: "Fire Evacuation Plan",
-        description: `Version ${plan.version}`,
-        dueDate: plan.dueAt,
-        status,
-        lastAction: `Uploaded ${new Date(plan.uploadedAt).toLocaleDateString()}`,
-      });
     }
     
     return items;
@@ -335,35 +386,43 @@ export const getFireEvacPlans = query({
     const userLocations = role.locations ?? [];
     const isAdmin = role.role === "admin";
     
-    const fireEvacs = await ctx.db.query("fire_evac").collect();
-    const latestByLocation: Record<string, any> = {};
-    
-    for (const fe of fireEvacs) {
-      if (!latestByLocation[fe.location] || fe.version > latestByLocation[fe.location].version) {
-        latestByLocation[fe.location] = fe;
-      }
-    }
+    const residents = await ctx.db.query("residents").collect();
+    const filteredResidents = isAdmin 
+      ? residents 
+      : residents.filter(r => userLocations.includes(r.location));
     
     const result = [];
     
-    for (const [location, plan] of Object.entries(latestByLocation)) {
-      if (!isAdmin && !userLocations.includes(location)) continue;
+    for (const resident of filteredResidents) {
+      const plans = await ctx.db
+        .query("fire_evac")
+        .withIndex("by_residentId", (q) => q.eq("residentId", resident._id))
+        .order("desc")
+        .take(1);
       
-      const now = Date.now();
-      const daysUntilDue = Math.ceil((plan.dueAt - now) / (1000 * 60 * 60 * 24));
-      
-      let status = "ok";
-      if (daysUntilDue < 0) status = "overdue";
-      else if (daysUntilDue <= 30) status = "due-soon";
-      
-      result.push({
-        id: plan._id,
-        location,
-        version: plan.version,
-        lastUpload: plan.uploadedAt,
-        nextDue: plan.dueAt,
-        status,
-      });
+      if (plans.length > 0) {
+        const plan = plans[0];
+        const dueDate = (plan.createdAt || Date.now()) + (365 * 24 * 60 * 60 * 1000);
+        const now = Date.now();
+        const daysUntilDue = Math.ceil((dueDate - now) / (1000 * 60 * 60 * 24));
+        
+        let status = "ok";
+        if (daysUntilDue < 0) status = "overdue";
+        else if (daysUntilDue <= 30) status = "due-soon";
+        
+        result.push({
+          id: plan._id,
+          residentId: resident._id,
+          residentName: resident.name,
+          location: resident.location,
+          version: plan.version,
+          lastUpload: plan.createdAt || Date.now(),
+          nextDue: dueDate,
+          status,
+          fileName: plan.fileName,
+          fileSize: plan.fileSize,
+        });
+      }
     }
     
     return result;
@@ -377,11 +436,8 @@ export const sendComplianceReminders = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
     
-    // Log the reminder action (no PHI in audit)
     await audit(ctx, "send_compliance_reminders", userId, `itemCount=${itemIds.length}`);
     
-    // In a real implementation, this would send emails/notifications
-    // For now, just return success
     return { sent: itemIds.length };
   },
 });
@@ -396,11 +452,8 @@ export const exportComplianceList = mutation({
     const role = await ctx.db.query("roles").withIndex("by_userId", (q) => q.eq("userId", userId)).unique();
     if (!role || role.role !== "admin") throw new Error("Forbidden");
     
-    // Log the export action
     await audit(ctx, "export_compliance_list", userId, `itemCount=${itemIds.length}`);
     
-    // In a real implementation, this would generate and return a file
-    // For now, just return success
     return { exported: itemIds.length };
   },
 });
@@ -415,13 +468,12 @@ export const resendGuardianLink = mutation({
     const link = await ctx.db.get(linkId);
     if (!link) throw new Error("Link not found");
     
-    // Extend expiration by 30 days
     const newExpiresAt = Date.now() + (30 * 24 * 60 * 60 * 1000);
     await ctx.db.patch(linkId, { expiresAt: newExpiresAt });
     
     await audit(ctx, "resend_guardian_link", userId, `linkId=${linkId}`);
     
-    return true;
+    return { linkId, token: link.token };
   },
 });
 
@@ -429,40 +481,41 @@ export const resendGuardianLink = mutation({
 export const generateComplianceAlerts = action({
   args: {},
   handler: async (ctx) => {
-    // For each location, check ISP and Fire Evac due dates
-    // Alert if due in <=30d and not already active
-    // 1. ISPs
     const residents = await ctx.runQuery(internal.compliance.internalListResidents, {});
     for (const resident of residents) {
-      const isps = await ctx.runQuery(internal.compliance.internalListResidentIsps, { residentId: resident._id });
-      const currentIsp = isps.find((i: any) => i.published);
-      if (currentIsp && currentIsp.dueAt && currentIsp.dueAt - Date.now() <= 1000 * 60 * 60 * 24 * 30) {
-        // Check if alert exists
-        const alerts = await ctx.runQuery(internal.compliance.internalListAlertsForLocation, { location: resident.location, type: "isp" });
-        const alreadyActive = alerts.some((a: any) => a.active && a.dueAt === currentIsp.dueAt);
-        if (!alreadyActive) {
-          await ctx.runMutation(internal.compliance.internalCreateAlert, {
-            type: "isp",
-            location: resident.location,
-            dueAt: currentIsp.dueAt,
-            details: `ISP due soon for resident(s) at ${resident.location}`,
-          });
+      const ispFiles = await ctx.runQuery(internal.compliance.internalListResidentISPFiles, { residentId: resident._id });
+      const activeISP = ispFiles.find((f: any) => f.status === "active");
+      if (activeISP) {
+        const dueAt = activeISP.effectiveDate + (6 * 30 * 24 * 60 * 60 * 1000);
+        if (dueAt - Date.now() <= 1000 * 60 * 60 * 24 * 30) {
+          const alerts = await ctx.runQuery(internal.compliance.internalListAlertsForLocation, { location: resident.location, type: "isp" });
+          const alreadyActive = alerts.some((a: any) => a.active && a.dueAt === dueAt);
+          if (!alreadyActive) {
+            await ctx.runMutation(internal.compliance.internalCreateAlert, {
+              type: "isp",
+              location: resident.location,
+              dueAt,
+              details: `ISP due soon for resident(s) at ${resident.location}`,
+            });
+          }
         }
       }
     }
-    // 2. Fire Evac
-    // For each location, get latest fire_evac
+    
+    // Fire Evac alerts - now per resident
     const fireEvacs = await ctx.runQuery(internal.compliance.internalListLatestFireEvac, {});
     for (const fe of fireEvacs) {
-      if (fe.dueAt - Date.now() <= 1000 * 60 * 60 * 24 * 30) {
-        const alerts = await ctx.runQuery(internal.compliance.internalListAlertsForLocation, { location: fe.location, type: "fire_evac" });
-        const alreadyActive = alerts.some((a: any) => a.active && a.dueAt === fe.dueAt);
+      const location = fe.location || "unknown";
+      const dueAt = (fe.createdAt || Date.now()) + (365 * 24 * 60 * 60 * 1000);
+      if (dueAt - Date.now() <= 1000 * 60 * 60 * 24 * 30) {
+        const alerts = await ctx.runQuery(internal.compliance.internalListAlertsForLocation, { location, type: "fire_evac" });
+        const alreadyActive = alerts.some((a: any) => a.active && a.dueAt === dueAt);
         if (!alreadyActive) {
           await ctx.runMutation(internal.compliance.internalCreateAlert, {
             type: "fire_evac",
-            location: fe.location,
-            dueAt: fe.dueAt,
-            details: `Fire Evac plan due soon for ${fe.location}`,
+            location,
+            dueAt,
+            details: `Fire Evac plan due soon for ${fe.residentName}`,
           });
         }
       }
@@ -476,7 +529,6 @@ import { Resend } from "resend";
 export const sendAlertEmails = action({
   args: {},
   handler: async (ctx) => {
-    // For each active alert, email all admins
     const alerts = await ctx.runQuery(internal.compliance.internalListAllActiveAlerts, {});
     const admins = (await ctx.runQuery(internal.compliance.internalListAdmins, {})) as any[];
     const resend = new Resend(process.env.CONVEX_RESEND_API_KEY);

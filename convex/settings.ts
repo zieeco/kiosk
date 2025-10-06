@@ -23,6 +23,16 @@ async function audit(ctx: any, event: string, userId: Id<"users"> | null, detail
   });
 }
 
+// Helper: Check admin access
+async function requireAdmin(ctx: any, userId: Id<"users">) {
+  const userRole = await getUserRoleDoc(ctx, userId);
+  if (!userRole || userRole.role !== "admin") {
+    await audit(ctx, "access_denied", userId, "admin_required");
+    throw new Error("Admin access required");
+  }
+  return userRole;
+}
+
 // Query: Get all users with their roles
 export const getAllUsersWithRoles = query({
   args: {},
@@ -30,8 +40,7 @@ export const getAllUsersWithRoles = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const userRole = await getUserRoleDoc(ctx, userId);
-    if (!userRole || userRole.role !== "admin") throw new Error("Forbidden");
+    await requireAdmin(ctx, userId);
 
     const users = await ctx.db.query("users").collect();
     const roles = await ctx.db.query("roles").collect();
@@ -72,8 +81,7 @@ export const updateUserRole = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const userRole = await getUserRoleDoc(ctx, userId);
-    if (!userRole || userRole.role !== "admin") throw new Error("Forbidden");
+    await requireAdmin(ctx, userId);
 
     const existingRole = await getUserRoleDoc(ctx, targetUserId);
 
@@ -103,8 +111,7 @@ export const deleteUserRole = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const userRole = await getUserRoleDoc(ctx, userId);
-    if (!userRole || userRole.role !== "admin") throw new Error("Forbidden");
+    await requireAdmin(ctx, userId);
 
     const existingRole = await getUserRoleDoc(ctx, targetUserId);
     if (existingRole) {
@@ -124,8 +131,7 @@ export const getKiosks = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const userRole = await getUserRoleDoc(ctx, userId);
-    if (!userRole || userRole.role !== "admin") throw new Error("Forbidden");
+    await requireAdmin(ctx, userId);
 
     const kiosks = await ctx.db.query("kiosks").collect();
     const auditLogs = await ctx.db.query("audit_logs").order("desc").take(1000);
@@ -137,7 +143,7 @@ export const getKiosks = query({
         id: kiosk._id,
         deviceId: kiosk.deviceId,
         location: kiosk.location,
-        active: kiosk.active,
+        status: kiosk.status,
         lastSeen,
       };
     });
@@ -151,8 +157,7 @@ export const getLocations = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const userRole = await getUserRoleDoc(ctx, userId);
-    if (!userRole || userRole.role !== "admin") throw new Error("Forbidden");
+    await requireAdmin(ctx, userId);
 
     const residents = await ctx.db.query("residents").collect();
     const kiosks = await ctx.db.query("kiosks").collect();
@@ -166,7 +171,7 @@ export const getLocations = query({
     return locationNames.map(location => ({
       name: location,
       residentCount: residents.filter(r => r.location === location).length,
-      kioskCount: kiosks.filter(k => k.location === location && k.active).length,
+      kioskCount: kiosks.filter(k => k.location === location && k.status === "active").length,
       staffCount: roles.filter(r => r.role === "staff" && (r.locations || []).includes(location)).length,
     }));
   },
@@ -182,19 +187,21 @@ export const registerKiosk = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const userRole = await getUserRoleDoc(ctx, userId);
-    if (!userRole || userRole.role !== "admin") throw new Error("Forbidden");
+    await requireAdmin(ctx, userId);
 
     // Check if device already exists
     const existing = await ctx.db.query("kiosks").withIndex("by_deviceId", (q: any) => q.eq("deviceId", deviceId)).unique();
     if (existing) throw new Error("Device ID already registered");
 
     await ctx.db.insert("kiosks", {
+      name: `Kiosk ${deviceId.slice(0, 8)}`,
       deviceId,
       location,
-      active: true,
+      status: "active",
       registeredAt: Date.now(),
       registeredBy: userId,
+      createdAt: Date.now(),
+      createdBy: userId,
     });
 
     await audit(ctx, "register_kiosk", userId, `deviceId=${deviceId},location=${location}`);
@@ -208,18 +215,17 @@ export const updateKiosk = mutation({
   args: {
     kioskId: v.id("kiosks"),
     location: v.string(),
-    active: v.boolean(),
+    status: v.union(v.literal("active"), v.literal("disabled"), v.literal("retired")),
   },
-  handler: async (ctx, { kioskId, location, active }) => {
+  handler: async (ctx, { kioskId, location, status }) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const userRole = await getUserRoleDoc(ctx, userId);
-    if (!userRole || userRole.role !== "admin") throw new Error("Forbidden");
+    await requireAdmin(ctx, userId);
 
-    await ctx.db.patch(kioskId, { location, active });
+    await ctx.db.patch(kioskId, { location, status });
 
-    await audit(ctx, "update_kiosk", userId, `kioskId=${kioskId},location=${location},active=${active}`);
+    await audit(ctx, "update_kiosk", userId, `kioskId=${kioskId},location=${location},status=${status}`);
 
     return true;
   },
@@ -232,10 +238,9 @@ export const deactivateKiosk = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const userRole = await getUserRoleDoc(ctx, userId);
-    if (!userRole || userRole.role !== "admin") throw new Error("Forbidden");
+    await requireAdmin(ctx, userId);
 
-    await ctx.db.patch(kioskId, { active: false });
+    await ctx.db.patch(kioskId, { status: "disabled" });
 
     await audit(ctx, "deactivate_kiosk", userId, `kioskId=${kioskId}`);
 
@@ -243,15 +248,14 @@ export const deactivateKiosk = mutation({
   },
 });
 
-// --- NEW: Delete kiosk mutation ---
+// Mutation: Delete kiosk
 export const deleteKiosk = mutation({
   args: { kioskId: v.id("kiosks") },
   handler: async (ctx, { kioskId }) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const userRole = await getUserRoleDoc(ctx, userId);
-    if (!userRole || userRole.role !== "admin") throw new Error("Forbidden");
+    await requireAdmin(ctx, userId);
 
     await ctx.db.delete(kioskId);
 
@@ -274,8 +278,7 @@ export const getAuditLogs = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const userRole = await getUserRoleDoc(ctx, userId);
-    if (!userRole || userRole.role !== "admin") throw new Error("Forbidden");
+    await requireAdmin(ctx, userId);
 
     const logs = await ctx.db.query("audit_logs").order("desc").take(1000);
     const users = await ctx.db.query("users").collect();
@@ -311,8 +314,7 @@ export const getAuditActors = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const userRole = await getUserRoleDoc(ctx, userId);
-    if (!userRole || userRole.role !== "admin") throw new Error("Forbidden");
+    await requireAdmin(ctx, userId);
 
     const users = await ctx.db.query("users").collect();
     const roles = await ctx.db.query("roles").collect();
@@ -335,8 +337,7 @@ export const getAuditActions = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const userRole = await getUserRoleDoc(ctx, userId);
-    if (!userRole || userRole.role !== "admin") throw new Error("Forbidden");
+    await requireAdmin(ctx, userId);
 
     const logs = await ctx.db.query("audit_logs").collect();
     const actions = [...new Set(logs.map(log => log.event))];
@@ -352,8 +353,7 @@ export const getAuditLocations = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const userRole = await getUserRoleDoc(ctx, userId);
-    if (!userRole || userRole.role !== "admin") throw new Error("Forbidden");
+    await requireAdmin(ctx, userId);
 
     const logs = await ctx.db.query("audit_logs").collect();
     const locations = [...new Set(logs.map(log => log.location).filter(Boolean))];
@@ -369,8 +369,7 @@ export const getAppSettings = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const userRole = await getUserRoleDoc(ctx, userId);
-    if (!userRole || userRole.role !== "admin") throw new Error("Forbidden");
+    await requireAdmin(ctx, userId);
 
     const config = await ctx.db.query("config").first();
 
@@ -381,6 +380,7 @@ export const getAppSettings = query({
       alertHour: config?.alertHour || 9,
       alertMinute: config?.alertMinute || 0,
       selfieEnforced: config?.selfieEnforced || false,
+      requireClockInForAccess: config?.requireClockInForAccess ?? true,
     };
   },
 });
@@ -394,13 +394,13 @@ export const updateAppSettings = mutation({
     alertHour: v.optional(v.number()),
     alertMinute: v.optional(v.number()),
     selfieEnforced: v.optional(v.boolean()),
+    requireClockInForAccess: v.optional(v.boolean()),
   },
   handler: async (ctx, settings) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
 
-    const userRole = await getUserRoleDoc(ctx, userId);
-    if (!userRole || userRole.role !== "admin") throw new Error("Forbidden");
+    await requireAdmin(ctx, userId);
 
     let config = await ctx.db.query("config").first();
 
@@ -413,6 +413,7 @@ export const updateAppSettings = mutation({
       if (settings.alertHour !== undefined) updates.alertHour = settings.alertHour;
       if (settings.alertMinute !== undefined) updates.alertMinute = settings.alertMinute;
       if (settings.selfieEnforced !== undefined) updates.selfieEnforced = settings.selfieEnforced;
+      if (settings.requireClockInForAccess !== undefined) updates.requireClockInForAccess = settings.requireClockInForAccess;
 
       await ctx.db.patch(config._id, updates);
     } else {
@@ -424,6 +425,7 @@ export const updateAppSettings = mutation({
         alertHour: settings.alertHour || 9,
         alertMinute: settings.alertMinute || 0,
         selfieEnforced: settings.selfieEnforced || false,
+        requireClockInForAccess: settings.requireClockInForAccess ?? true,
       });
     }
 
@@ -433,17 +435,18 @@ export const updateAppSettings = mutation({
   },
 });
 
-// --- NEW: Get user role ---
+// Query: Get user role (enhanced with access control)
 export const getUserRole = query({
   args: {},
   handler: async (ctx) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
+    
     const role = await getUserRoleDoc(ctx, userId);
     return {
       role: role?.role || null,
       locations: role?.locations || [],
-      isKiosk: false, // Placeholder
+      isKiosk: false, // Placeholder for kiosk detection
     };
   },
 });

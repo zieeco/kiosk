@@ -11,7 +11,6 @@ const COMM_CHANNELS = [
 
 export default function ResidentOnboardingForm({ onCreated }: { onCreated?: (residentId: string) => void }) {
   const [form, setForm] = useState({
-    residentId: "",
     legalName: "",
     dob: "",
     location: "",
@@ -50,29 +49,27 @@ export default function ResidentOnboardingForm({ onCreated }: { onCreated?: (res
     e.preventDefault();
     setError(null);
 
-    if (!form.residentId.trim() || !form.legalName.trim() || !form.dob.trim() || !form.location.trim()) {
+    if (!form.legalName.trim() || !form.dob.trim() || !form.location.trim()) {
       setError("All required fields must be filled.");
       return;
     }
     setIsSubmitting(true);
     try {
       const result = await createResident({
-        residentId: form.residentId.trim(),
-        legalName: form.legalName.trim(),
-        dob: form.dob.trim(),
+        name: form.legalName.trim(),
+        dateOfBirth: form.dob.trim(),
         location: form.location,
-        guardians: form.guardians.filter(g => g.name && (g.email || g.phone)),
+        guardians: form.guardians,
         generateChecklist: form.generateChecklist,
       });
       setForm({
-        residentId: "",
         legalName: "",
         dob: "",
         location: "",
         guardians: [{ name: "", email: "", phone: "", preferredChannel: "email" }],
         generateChecklist: false,
       });
-      if (onCreated && result?.residentId) onCreated(result.residentId);
+      if (onCreated && result) onCreated(result);
       alert("Resident created successfully!");
     } catch (err) {
       setError((err as Error).message);
@@ -85,17 +82,6 @@ export default function ResidentOnboardingForm({ onCreated }: { onCreated?: (res
     <form onSubmit={handleSubmit} className="bg-white rounded-lg shadow-sm border p-6 space-y-6">
       <h3 className="text-lg font-semibold mb-4">Add New Resident</h3>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">Resident ID *</label>
-          <input
-            type="text"
-            value={form.residentId}
-            onChange={e => setForm(f => ({ ...f, residentId: e.target.value }))}
-            className="w-full border border-gray-300 rounded-md px-3 py-2"
-            required
-            disabled={isSubmitting}
-          />
-        </div>
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">Legal Name *</label>
           <input

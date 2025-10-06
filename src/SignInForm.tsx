@@ -5,7 +5,6 @@ import { toast } from "sonner";
 
 export function SignInForm({ onSuccess }: { onSuccess?: (userId: string) => void }) {
   const { signIn } = useAuthActions();
-  const [flow, setFlow] = useState<"signIn" | "signUp">("signIn");
   const [submitting, setSubmitting] = useState(false);
 
   return (
@@ -27,34 +26,41 @@ export function SignInForm({ onSuccess }: { onSuccess?: (userId: string) => void
           p-6 sm:p-7 md:p-8
         "
       >
+        {/* Wordmark (no logo) */}
+        <div className="mb-2 text-center">
+          <div className="text-3xl font-bold tracking-tight text-black">
+            El-Elyon <span className="text-blue-500">Properties LLC</span>
+          </div>
+        </div>
+
         <form
           className="flex flex-col gap-4 sm:gap-5"
           onSubmit={(e) => {
             e.preventDefault();
             setSubmitting(true);
             const formData = new FormData(e.target as HTMLFormElement);
-            formData.set("flow", flow);
+            // Internal app: sign-in only
+            formData.set("flow", "signIn");
             void signIn("password", formData)
               .then((result) => {
                 if (onSuccess && result) onSuccess(result.toString());
               })
               .catch((error) => {
-                let toastTitle = "";
-                if (error.message.includes("Invalid password")) {
-                  toastTitle = "Invalid password. Please try again.";
+                const errorMessage = error.message || "An unknown error occurred";
+                console.error("Sign-in error:", errorMessage);
+                if (errorMessage.includes("Invalid password")) {
+                  toast.error("Invalid password. Please try again.");
+                } else if (errorMessage.includes("User not found")) {
+                  toast.error("No account found with that email address.");
                 } else {
-                  toastTitle =
-                    flow === "signIn"
-                      ? "Could not sign in, did you mean to sign up?"
-                      : "Could not sign up, did you mean to sign in?";
+                  toast.error(`Could not sign in: ${errorMessage}`);
                 }
-                toast.error(toastTitle);
                 setSubmitting(false);
               });
           }}
         >
-          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">
-            {flow === "signIn" ? "Welcome back" : "Create your account"}
+          <h1 className="text-lg sm:text-xl font-semibold tracking-tight text-center">
+            Welcome back
           </h1>
 
           <div className="flex flex-col gap-3">
@@ -70,7 +76,7 @@ export function SignInForm({ onSuccess }: { onSuccess?: (userId: string) => void
               type="email"
               name="email"
               placeholder="Email"
-              autoComplete="email"
+              autoComplete="username"
               required
             />
             <input
@@ -85,7 +91,7 @@ export function SignInForm({ onSuccess }: { onSuccess?: (userId: string) => void
               type="password"
               name="password"
               placeholder="Password"
-              autoComplete={flow === "signIn" ? "current-password" : "new-password"}
+              autoComplete="current-password"
               required
             />
           </div>
@@ -102,44 +108,23 @@ export function SignInForm({ onSuccess }: { onSuccess?: (userId: string) => void
             type="submit"
             disabled={submitting}
           >
-            {submitting
-              ? flow === "signIn" ? "Signing in…" : "Creating account…"
-              : flow === "signIn" ? "Sign in" : "Sign up"}
+            {submitting ? "Signing in…" : "Sign in securely"}
           </button>
 
-          <div className="text-center text-sm text-secondary sm:text-base">
-            <span>
-              {flow === "signIn" ? "Don't have an account? " : "Already have an account? "}
-            </span>
-            <button
-              type="button"
-              className="text-primary hover:text-primary/80 hover:underline font-medium"
-              onClick={() => setFlow(flow === "signIn" ? "signUp" : "signIn")}
-            >
-              {flow === "signIn" ? "Sign up instead" : "Sign in instead"}
-            </button>
+          {/* Optional internal link — keep if you support password resets */}
+          <div className="text-right">
+            <a href="/forgot" className="text-sm text-primary hover:text-primary/80 underline">
+              Forgot password?
+            </a>
           </div>
-{/* 
-          <div className="flex items-center gap-3 my-2">
-            <hr className="grow border-gray-200 dark:border-neutral-800" />
-            <span className="text-secondary text-sm">or</span>
-            <hr className="grow border-gray-200 dark:border-neutral-800" />
-          </div> */}
 
-          {/* <button
-            className="
-              auth-button
-              w-full block
-              rounded-lg px-4 py-2.5
-              font-medium
-            "
-            type="button"
-            onClick={() => void signIn("anonymous")}
-            disabled={submitting}
-          >
-            Continue as guest
-          </button> */}
+          {/* Removed public sign-up toggle for internal app */}
         </form>
+
+        {/* Footer credit */}
+        <div className="pt-6 text-center text-xs text-gray-500">
+          Powered by <span className="font-medium">Bold Ideas Innovations Ltd.</span>
+        </div>
       </div>
     </div>
   );
