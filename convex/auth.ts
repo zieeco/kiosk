@@ -218,53 +218,82 @@ export const bootstrapFirstAdmin = action({
 });
 
 /**
- * INTERNAL MUTATION: updateUserPasswordByEmail
- * Allows updating a user's password by email.
- * This is a temporary utility to help the user regain access to an admin account.
+ * ACTION: updateUserPasswordByEmail
+ * Allows updating a user's password by email (must be action because bcrypt uses setTimeout)
  */
-export const updateUserPasswordByEmail = mutation({
-	args: {
-		email: v.string(),
-		newPassword: v.string(),
-	},
-	returns: v.object({success: v.boolean(), message: v.optional(v.string())}),
-	handler: async (ctx, args) => {
-		const normalizedEmail = args.email.toLowerCase().trim();
+export const updateUserPasswordByEmail = action({
+  args: {
+	email: v.string(),
+	newPassword: v.string(),
+  },
+  handler: async (ctx, args): Promise<{ success: boolean; message?: string }> => {
+    const normalizedEmail = args.email.toLowerCase().trim();
 
-		// Find the user
-		const user = await ctx.db
-			.query('users')
-			.withIndex('email', (q) => q.eq('email', normalizedEmail))
-			.first();
+    // Find the user (actions can query)
+	const user: Doc<'users'> | null = await ctx.runQuery(api.auth._findUserByEmail, { email: normalizedEmail });
 
-		if (!user) {
-			return {success: false, message: 'User not found'};
-		}
+    if (!user) {
+      return { success: false, message: "User not found" };
+    }
 
-		// Hash the new password
-		const hashedPassword = await bcrypt.hash(args.newPassword, 10);
+    // Hash the new password (can use bcrypt in action)
+    const hashedPassword = await bcrypt.hash(args.newPassword, 10);
 
-		// Update the user's password in authAccounts
-		const authAccount = await ctx.db
-			.query('authAccounts')
-			.filter((q) =>
-				q.and(
-					q.eq(q.field('userId'), user._id),
-					q.eq(q.field('provider'), 'password')
-				)
-			)
-			.first();
+    // Update via mutation
+    const result = await ctx.runMutation(api.auth._updatePasswordHash, {
+      userId: user._id,
+      hashedPassword,
+    });
 
-		if (!authAccount) {
-			return {success: false, message: 'No password account found for user'};
-		}
+    return result;
+  },
+});
 
-		// Update the password
-		await ctx.db.patch(authAccount._id, {
-			secret: hashedPassword,
-		});
+/**
+ * INTERNAL QUERY: _findUserByEmail
+ */
+export const _findUserByEmail = query({
+  args: { email: v.string() },
+  handler: async (ctx, args) => {
+    const user = await ctx.db
+      .query("users")
+      .withIndex("email", (q) => q.eq("email", args.email))
+      .first();
+    
+    return user;
+  },
+});
 
-		console.log(`Password for ${normalizedEmail} updated successfully.`);
-		return {success: true};
-	},
+/**
+ * INTERNAL MUTATION: _updatePasswordHash
+ */
+export const _updatePasswordHash = mutation({
+  args: {
+    userId: v.id("users"),
+    hashedPassword: v.string(),
+  },
+  handler: async (ctx, args) => {
+    // Find and update the auth account
+    const authAccount = await ctx.db
+      .query("authAccounts")
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("userId"), args.userId),
+          q.eq(q.field("provider"), "password")
+        )
+      )
+      .first();
+
+    if (!authAccount) {
+      return { success: false, message: "No password account found for user" };
+    }
+
+    // Update the password
+    await ctx.db.patch(authAccount._id, {
+      secret: args.hashedPassword,
+    });
+
+    console.log(`Password updated successfully for user ${args.userId}`);
+    return { success: true };
+  },
 });
