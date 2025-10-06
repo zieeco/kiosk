@@ -6,7 +6,7 @@ import {v} from 'convex/values';
 import {createAccount} from '@convex-dev/auth/server';
 import {api} from './_generated/api';
 import {Doc, Id} from './_generated/dataModel'; // Added Doc and Id imports
-import bcrypt from "bcryptjs"; // Import bcryptjs
+import bcrypt from 'bcryptjs'; // Import bcryptjs
 
 // Export these — Convex looks for them.
 export const {auth, signIn, signOut, isAuthenticated} = convexAuth({
@@ -32,7 +32,8 @@ export const store = mutation({
 				provider: v.string(),
 				type: v.literal('retrieveAccountWithCredentials'),
 			}),
-			v.object({ // Added new type for createAccountFromCredentials
+			v.object({
+				// Added new type for createAccountFromCredentials
 				account: v.object({
 					id: v.string(),
 					secret: v.string(),
@@ -66,7 +67,8 @@ export const store = mutation({
 				'Type:',
 				args.type
 			);
-		} else if (args.type === 'createAccountFromCredentials') { // Added handler for new type
+		} else if (args.type === 'createAccountFromCredentials') {
+			// Added handler for new type
 			console.log(
 				'Creating account from credentials:',
 				args.account.id,
@@ -121,7 +123,8 @@ export const loggedInUser = query({
 		if (!identity) return null;
 
 		// Get user from users table
-		const user: Doc<'users'> | null = await ctx.db.get( // Explicitly type user
+		const user: Doc<'users'> | null = await ctx.db.get(
+			// Explicitly type user
 			identity.subject as Id<'users'> // Cast identity.subject to Id<'users'>
 		);
 		if (!user) return null;
@@ -171,34 +174,37 @@ export const bootstrapFirstAdmin = action({
 		password: v.string(),
 	},
 	handler: async (ctx, args) => {
-    const email = args.email.trim().toLowerCase();
+		const email = args.email.trim().toLowerCase();
 
-    // 1) Allow creating multiple admins for now, as requested by the user.
-    //    The original check was:
-    //    const existing = await ctx.runQuery(api.auth.listAdmins);
-    //    if (existing.length > 0) {
-    //      return { ok: false, message: "Admin already exists" };
-    //    }
+		// 1) Allow creating multiple admins for now, as requested by the user.
+		//    The original check was:
+		//    const existing = await ctx.runQuery(api.auth.listAdmins);
+		//    if (existing.length > 0) {
+		//      return { ok: false, message: "Admin already exists" };
+		//    }
 
-    try {
-      // 2) Create the user + password account
-      const result = await createAccount(ctx, {
-        provider: "password",
-        account: {
-          id: email,
-          secret: args.password,
-        },
-        profile: {
-          email,
-          name: args.name,
-        },
-      });
+		try {
+			// 2) Create the user + password account
+			const result = await createAccount(ctx, {
+				provider: 'password',
+				account: {
+					id: email,
+					secret: args.password,
+				},
+				profile: {
+					email,
+					name: args.name,
+				},
+			});
 
-      if (!result || !result.user) {
-        console.error("createAccount returned null or missing user:", result);
-        return { ok: false, message: "Failed to create user account (user object missing)." };
-      }
-      const { user } = result;
+			if (!result || !result.user) {
+				console.error('createAccount returned null or missing user:', result);
+				return {
+					ok: false,
+					message: 'Failed to create user account (user object missing).',
+				};
+			}
+			const {user} = result;
 
 			// 3) Insert admin role via mutation
 			await ctx.runMutation(api.auth._insertAdminRole, {userId: user._id});
@@ -217,48 +223,48 @@ export const bootstrapFirstAdmin = action({
  * This is a temporary utility to help the user regain access to an admin account.
  */
 export const updateUserPasswordByEmail = mutation({
-  args: {
-    email: v.string(),
-    newPassword: v.string(),
-  },
-  returns: v.object({ success: v.boolean(), message: v.optional(v.string()) }),
-  handler: async (ctx, args) => {
-    const normalizedEmail = args.email.toLowerCase().trim();
+	args: {
+		email: v.string(),
+		newPassword: v.string(),
+	},
+	returns: v.object({success: v.boolean(), message: v.optional(v.string())}),
+	handler: async (ctx, args) => {
+		const normalizedEmail = args.email.toLowerCase().trim();
 
-    // Find the user
-    const user = await ctx.db
-      .query("users")
-      .withIndex("email", (q) => q.eq("email", normalizedEmail))
-      .first();
+		// Find the user
+		const user = await ctx.db
+			.query('users')
+			.withIndex('email', (q) => q.eq('email', normalizedEmail))
+			.first();
 
-    if (!user) {
-      return { success: false, message: "User not found" };
-    }
+		if (!user) {
+			return {success: false, message: 'User not found'};
+		}
 
-    // Hash the new password
-    const hashedPassword = await bcrypt.hash(args.newPassword, 10);
+		// Hash the new password
+		const hashedPassword = await bcrypt.hash(args.newPassword, 10);
 
-    // Update the user's password in authAccounts
-    const authAccount = await ctx.db
-      .query("authAccounts")
-      .filter((q) =>
-        q.and(
-          q.eq(q.field("userId"), user._id),
-          q.eq(q.field("provider"), "password")
-        )
-      )
-      .first();
+		// Update the user's password in authAccounts
+		const authAccount = await ctx.db
+			.query('authAccounts')
+			.filter((q) =>
+				q.and(
+					q.eq(q.field('userId'), user._id),
+					q.eq(q.field('provider'), 'password')
+				)
+			)
+			.first();
 
-    if (!authAccount) {
-      return { success: false, message: "No password account found for user" };
-    }
+		if (!authAccount) {
+			return {success: false, message: 'No password account found for user'};
+		}
 
-    // Update the password
-    await ctx.db.patch(authAccount._id, {
-      secret: hashedPassword,
-    });
+		// Update the password
+		await ctx.db.patch(authAccount._id, {
+			secret: hashedPassword,
+		});
 
-    console.log(`Password for ${normalizedEmail} updated successfully.`);
-    return { success: true };
-  },
+		console.log(`Password for ${normalizedEmail} updated successfully.`);
+		return {success: true};
+	},
 });
