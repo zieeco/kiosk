@@ -37,10 +37,10 @@ const applicationTables = {
     workEmail: v.string(),
     phone: v.optional(v.string()), // Add phone field
     role: v.optional(v.union(v.literal("admin"), v.literal("supervisor"), v.literal("staff"), v.literal(""))),
-    locations: v.optional(v.array(v.string())),
+    locations: v.array(v.string()),
     invitedAt: v.optional(v.number()),
     invitedBy: v.optional(v.id("users")),
-    hasAcceptedInvite: v.optional(v.boolean()),
+    hasAcceptedInvite: v.boolean(),
     inviteToken: v.optional(v.string()),
     inviteExpiresAt: v.optional(v.number()),
     onboardedBy: v.optional(v.id("users")), // Add onboarded fields
@@ -259,7 +259,6 @@ const applicationTables = {
     alertHour: v.optional(v.number()),
     alertMinute: v.optional(v.number()),
     selfieEnforced: v.optional(v.boolean()),
-    requireClockInForAccess: v.optional(v.boolean()),
   }),
 
   // Guardian checklist templates
@@ -338,18 +337,6 @@ const applicationTables = {
   })
     .index("by_type", ["type"])
     .index("by_active", ["active"]),
-
-  // Password reset tokens
-  password_reset_tokens: defineTable({
-    userId: v.id("users"),
-    token: v.string(),
-    expiresAt: v.number(),
-    used: v.boolean(),
-    createdAt: v.number(),
-    usedAt: v.optional(v.number()),
-  })
-    .index("by_token", ["token"])
-    .index("by_userId", ["userId"]),
 };
 
 export default defineSchema({

@@ -1,160 +1,155 @@
 import { Authenticated, Unauthenticated, useQuery } from "convex/react";
 import { api } from "../convex/_generated/api";
 import { SignInForm } from "./SignInForm";
-import { useEffect, useState } from "react";
 import { Toaster } from "sonner";
+import KioskSession from "./KioskSession";
+import InviteAcceptance from "./components/InviteAcceptance";
+import GuardianChecklistPublic from "./components/GuardianChecklistPublic";
+import AccessControl from "./components/AccessControl";
 import AdminPortal from "./components/AdminPortal";
 import CarePortal from "./components/CarePortal";
-import SupervisorPortal from "./components/SupervisorPortal";
-import BootstrapAdmin from "./components/BootstrapAdmin";
-import InviteAcceptance from "./components/InviteAcceptance";
-import EmployeeInviteAcceptance from "./components/EmployeeInviteAcceptance";
-import GuardianChecklistPublic from "./components/GuardianChecklistPublic";
-import KioskPairingScreen from "./components/KioskPairingScreen";
-import ForgotPasswordPage from "./components/ForgotPasswordPage";
-import ResetPasswordPage from "./components/ResetPasswordPage";
+import PendingPage from "./components/PendingPage";
+import FirstAdminSetup from "./components/FirstAdminSetup";
+import { useEffect, useState } from "react";
 
 function App() {
-  const needsBootstrap = useQuery(api.auth.needsBootstrap);
-  const [inviteToken, setInviteToken] = useState<string | null>(null);
-  const [employeeInviteToken, setEmployeeInviteToken] = useState<string | null>(null);
-  const [checklistToken, setChecklistToken] = useState<string | null>(null);
-  const [pairingToken, setPairingToken] = useState<string | null>(null);
-  const [isForgotPassword, setIsForgotPassword] = useState(false);
-  const [isResetPassword, setIsResetPassword] = useState(false);
+  // Check if this is an invite acceptance URL or checklist URL
+  const urlParams = new URLSearchParams(window.location.search);
+  const inviteToken = urlParams.get("invite");
+  const checklistToken = urlParams.get("checklist");
 
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const invite = params.get("invite");
-    const employeeInvite = params.get("employee_invite");
-    const checklist = params.get("checklist");
-    const pairing = params.get("pairing");
-    const forgot = window.location.pathname === "/forgot";
-    const reset = window.location.pathname === "/reset-password" || window.location.pathname.includes("reset-password");
-    
-    if (invite) setInviteToken(invite);
-    if (employeeInvite) setEmployeeInviteToken(employeeInvite);
-    if (checklist) setChecklistToken(checklist);
-    if (pairing) setPairingToken(pairing);
-    if (forgot) setIsForgotPassword(true);
-    if (reset) setIsResetPassword(true);
-  }, []);
+  const [currentRoute, setCurrentRoute] = useState(window.location.pathname);
+  const sessionInfo = useQuery(api.access.getSessionInfo);
+  const role = useQuery(api.settings.getUserRole);
+  const userEmployeeLink = useQuery(api.employees.checkUserEmployeeLink);
+  const hasAdmin = useQuery(api.admin.hasAdminUser);
 
-  // Show forgot password page
-  if (isForgotPassword) {
-    return (
-      <>
-        <Toaster position="top-center" />
-        <ForgotPasswordPage />
-      </>
-    );
-  }
-
-  // Show reset password page
-  if (isResetPassword) {
-    return (
-      <>
-        <Toaster position="top-center" />
-        <ResetPasswordPage />
-      </>
-    );
-  }
-
-  // Show kiosk pairing screen
-  if (pairingToken) {
-    return (
-      <>
-        <Toaster position="top-center" />
-        <KioskPairingScreen onPairingComplete={(deviceData) => {
-          console.log("Pairing complete:", deviceData);
-          window.location.href = "/";
-        }} />
-      </>
-    );
-  }
-
-  // Show guardian checklist (public, no auth required)
+  // Show Guardian Checklist page if checklistToken is present
   if (checklistToken) {
     return (
       <>
-        <Toaster position="top-center" />
+        <Toaster />
         <GuardianChecklistPublic token={checklistToken} />
       </>
     );
   }
 
-  // Show employee invite acceptance page
-  if (employeeInviteToken) {
-    return (
-      <>
-        <Toaster position="top-center" />
-        <EmployeeInviteAcceptance token={employeeInviteToken} />
-      </>
-    );
-  }
-
-  // Show invite acceptance page
+  // Show InviteAcceptance page first if inviteToken is present
   if (inviteToken) {
     return (
       <>
-        <Toaster position="top-center" />
+        <Toaster />
         <InviteAcceptance token={inviteToken} />
       </>
     );
   }
 
-  // Show bootstrap page if no admin exists
-  if (needsBootstrap === true) {
+  // Show Kiosk mode if on /kiosk route
+  if (currentRoute === "/kiosk") {
     return (
       <>
-        <Toaster position="top-center" />
-        <BootstrapAdmin />
+        <Toaster />
+        <Authenticated>
+          <KioskSession>{null}</KioskSession>
+        </Authenticated>
+        <Unauthenticated>
+          <SignInForm />
+        </Unauthenticated>
       </>
     );
   }
 
+  // Update route when URL changes
+  useEffect(() => {
+    const handlePopState = () => {
+      setCurrentRoute(window.location.pathname);
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  // Handle automatic routing based on user role
+  useEffect(() => {
+    if (sessionInfo && sessionInfo.authenticated) {
+      const { defaultRoute } = sessionInfo;
+      // Only redirect if we're on root path
+      if (currentRoute === "/") {
+        if (currentRoute !== defaultRoute) {
+          window.history.replaceState({}, "", defaultRoute);
+          setCurrentRoute(defaultRoute);
+        }
+      }
+    }
+  }, [sessionInfo, currentRoute]);
+
+  const renderAuthenticatedContent = () => {
+    // Show first admin setup if no admin exists
+    if (hasAdmin === false) {
+      return <FirstAdminSetup />;
+    }
+
+    // Handle kiosk mode
+    if (role?.isKiosk) {
+      return <KioskSession>{null}</KioskSession>;
+    }
+
+    // If user does NOT have a role but has a pending employee link, show InviteAcceptance
+    if (!sessionInfo?.role && userEmployeeLink) {
+      return <InviteAcceptance token="" />;
+    }
+
+    // If user does NOT have a role and no pending link, show PendingPage
+    if (currentRoute === "/pending" || !sessionInfo?.role) {
+      return <PendingPage />;
+    }
+
+    // Admin portal - only for admin role
+    if (currentRoute.startsWith("/admin")) {
+      return (
+        <AccessControl route={currentRoute}>
+          <AdminPortal />
+        </AccessControl>
+      );
+    }
+
+    // Care portal - for supervisor and staff roles
+    if (currentRoute.startsWith("/care")) {
+      return (
+        <AccessControl route={currentRoute}>
+          <CarePortal />
+        </AccessControl>
+      );
+    }
+
+    // Default routing based on role
+    if (sessionInfo?.role === "admin") {
+      return (
+        <AccessControl route="/admin">
+          <AdminPortal />
+        </AccessControl>
+      );
+    }
+
+    if (sessionInfo?.role === "supervisor" || sessionInfo?.role === "staff") {
+      return (
+        <AccessControl route="/care">
+          <CarePortal />
+        </AccessControl>
+      );
+    }
+
+    // Default fallback
+    return <PendingPage />;
+  };
+
   return (
     <>
-      <Toaster position="top-center" />
-      <Authenticated>
-        <AuthenticatedApp />
-      </Authenticated>
+      <Toaster />
+      <Authenticated>{renderAuthenticatedContent()}</Authenticated>
       <Unauthenticated>
         <SignInForm />
       </Unauthenticated>
     </>
-  );
-}
-
-function AuthenticatedApp() {
-  const user = useQuery(api.auth.loggedInUser);
-
-  if (!user) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="text-center">
-          <div className="text-4xl mb-4">⏳</div>
-          <p className="text-gray-600">Loading...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (user.role === "admin") {
-    return <AdminPortal />;
-  } else if (user.role === "supervisor") {
-    return <SupervisorPortal />;
-  } else if (user.role === "staff") {
-    return <CarePortal />;
-  }
-
-  return (
-    <div className="flex items-center justify-center min-h-screen">
-      <div className="text-center">
-        <div className="text-4xl mb-4">⚠️</div>
-        <p className="text-gray-600">No role assigned. Please contact your administrator.</p>
-      </div>
-    </div>
   );
 }
 

@@ -438,6 +438,12 @@ export const sendComplianceReminders = mutation({
     
     await audit(ctx, "send_compliance_reminders", userId, `itemCount=${itemIds.length}`);
     
+    // Schedule email action
+    await ctx.scheduler.runAfter(0, internal.complianceEmails.sendComplianceReminderEmails, {
+      itemIds,
+      userId,
+    });
+    
     return { sent: itemIds.length };
   },
 });
@@ -472,6 +478,12 @@ export const resendGuardianLink = mutation({
     await ctx.db.patch(linkId, { expiresAt: newExpiresAt });
     
     await audit(ctx, "resend_guardian_link", userId, `linkId=${linkId}`);
+    
+    // Schedule email action
+    await ctx.scheduler.runAfter(0, internal.complianceEmails.sendGuardianChecklistEmail, {
+      linkId,
+      token: link.token,
+    });
     
     return { linkId, token: link.token };
   },
@@ -531,16 +543,24 @@ export const sendAlertEmails = action({
   handler: async (ctx) => {
     const alerts = await ctx.runQuery(internal.compliance.internalListAllActiveAlerts, {});
     const admins = (await ctx.runQuery(internal.compliance.internalListAdmins, {})) as any[];
-    const resend = new Resend(process.env.CONVEX_RESEND_API_KEY);
+    // Use custom Resend API key if available, otherwise fall back to Convex proxy
+    const apiKey = process.env.RESEND_API_KEY || process.env.CONVEX_RESEND_API_KEY;
+    if (!apiKey) {
+      throw new Error("No Resend API key configured");
+    }
+    const resend = new Resend(apiKey);
+    const fromEmail = process.env.FROM_EMAIL || "Compliance System <noreply@compliance.example.com>";
+    const baseUrl = process.env.SITE_URL || process.env.CONVEX_SITE_URL || "https://yourdomain.com";
+    
     for (const alert of alerts) {
       for (const admin of admins) {
         if (!admin || typeof admin.email !== "string") continue;
         await resend.emails.send({
-          from: "Chef Compliance <noreply@chef.app>",
+          from: fromEmail,
           to: admin.email,
           subject: `Compliance Alert: ${alert.type.toUpperCase()} due soon`,
           html: `<p>A compliance item (${alert.type}) is due soon for location: ${alert.location}.</p>
-          <p><a href=\"https://your-app-url.com/compliance\">View details in Chef (secure login required)</a></p>`,
+          <p><a href="${baseUrl}/?view=compliance">View details in the compliance dashboard (secure login required)</a></p>`,
         });
       }
     }

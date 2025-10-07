@@ -32,7 +32,7 @@ export default function ComplianceSettings() {
     if (selectedIds.length === 0) return;
     try {
       await sendReminders({ itemIds: selectedIds });
-      toast.success("Reminders sent!");
+      toast.success(`Compliance reminder emails are being sent to all admins and supervisors for ${selectedIds.length} item(s)!`);
       setSelectedIds([]);
     } catch (e: any) {
       toast.error(e.message || "Failed to send reminders");

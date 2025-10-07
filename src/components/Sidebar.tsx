@@ -28,6 +28,11 @@ const NAV_SECTIONS = [
     icon: "📋"
   },
   {
+    key: "data-cleanup",
+    label: "Data Cleanup",
+    icon: "🧹"
+  },
+  {
     key: "settings",
     label: "Settings",
     icon: "🔐"

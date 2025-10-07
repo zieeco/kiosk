@@ -60,18 +60,6 @@ const userRole = useQuery(api.settings.getUserRole);
     );
   }
 
-  // Show loading state while kiosk data is being fetched
-  if (kiosk === undefined) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading kiosk information...</p>
-        </div>
-      </div>
-    );
-  }
-
   // Check if kiosk is still active
   if (kiosk === null) {
     return (

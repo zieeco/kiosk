@@ -10,6 +10,7 @@ import SettingsWorkspace from "./SettingsWorkspace";
 import ComplianceAlerts from "./ComplianceAlerts";
 import LocationsWorkspace from "./LocationsWorkspace";
 import GuardianChecklistWorkspace from "./GuardianChecklistWorkspace";
+import { DataCleanupWorkspace } from "./DataCleanupWorkspace";
 
 export default function AdminPortal() {
   const [activeView, setActiveView] = useState("dashboard");
@@ -27,6 +28,8 @@ export default function AdminPortal() {
         return <LocationsWorkspace />;
       case "guardian-checklists":
         return <GuardianChecklistWorkspace />;
+      case "data-cleanup":
+        return <DataCleanupWorkspace />;
       case "settings":
         return <SettingsWorkspace />;
       default:

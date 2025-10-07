@@ -36,8 +36,8 @@ export const sendInviteEmail = internalAction({
       
       const resend = new Resend(apiKey);
       
-      // Build invite URL - use deployment URL
-      const baseUrl = process.env.SITE_URL || 'https://fleet-bobcat-14.convex.site';
+      // Build invite URL - use environment variable or fallback
+      const baseUrl = process.env.SITE_URL || process.env.CONVEX_SITE_URL || 'http://localhost:5173';
       const inviteUrl = `${baseUrl}/?invite=${args.inviteToken}`;
       
       console.log("Invite URL:", inviteUrl);
@@ -100,7 +100,7 @@ export const sendInviteEmail = internalAction({
       `;
 
       const { data, error } = await resend.emails.send({
-        from: "El-Elyon Properties <noreply@myezer.org>",
+        from: process.env.FROM_EMAIL || "Care Team <noreply@caremanagement.example.com>",
         to: employee.email,
         subject: `Welcome to the Care Team - Complete Your Setup (Token: ${args.inviteToken})`,
         html: emailHtml,

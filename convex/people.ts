@@ -2,7 +2,7 @@ import { mutation, query, action } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { Resend } from "resend";
 
 // Helper: Get user role doc
@@ -81,7 +81,12 @@ export const sendEmployeeInviteEmail = action({
     locations: v.array(v.string()),
   },
   handler: async (ctx, { email, name, inviteUrl, role, locations }) => {
-    const resend = new Resend(process.env.RESEND_API_KEY || process.env.CONVEX_RESEND_API_KEY);
+    // Use custom Resend API key if available, otherwise fall back to Convex proxy
+    const apiKey = process.env.RESEND_API_KEY || process.env.CONVEX_RESEND_API_KEY;
+    if (!apiKey) {
+      throw new Error("No Resend API key configured");
+    }
+    const resend = new Resend(apiKey);
 
     const subject = "You're invited to join the Care App";
     const html = `
@@ -99,8 +104,9 @@ export const sendEmployeeInviteEmail = action({
       </div>
     `;
 
+    const fromEmail = process.env.FROM_EMAIL || "Care App <noreply@care-app.convex.app>";
     const { error } = await resend.emails.send({
-      from: "El-Elyon Properties <noreply@myezer.org>",
+      from: fromEmail,
       to: email,
       subject,
       html,
@@ -242,7 +248,7 @@ export const createResident = mutation({
               residentId, templateId: defaultTemplate._id, guardianEmail: guardian.email,
               token, sentDate: Date.now(), expiresAt, completed: false,
             });
-            await ctx.scheduler.runAfter(0, api.guardianChecklists.sendChecklistEmail, { linkId, token });
+            await ctx.scheduler.runAfter(0, internal.complianceEmails.sendGuardianChecklistEmail, { linkId, token });
           }
         }
       }
@@ -349,7 +355,7 @@ export const updateGuardian = mutation({
   },
 });
 
-// Delete guardian (admin only) - CASCADE DELETE
+// Delete guardian (admin only) - CASCADE
 export const deleteGuardian = mutation({
   args: { guardianId: v.id("guardians") },
   handler: async (ctx, args) => {
@@ -361,25 +367,32 @@ export const deleteGuardian = mutation({
     const guardian = await ctx.db.get(args.guardianId);
     if (!guardian) throw new Error("Guardian not found");
 
-    // 1. Delete all guardian checklist links
-    const checklistLinks = await ctx.db
-      .query("guardian_checklist_links")
-      .collect();
-    for (const link of checklistLinks) {
+    // Remove guardianId from all residents' guardianIds arrays
+    if (guardian.residentIds && guardian.residentIds.length > 0) {
+      for (const residentId of guardian.residentIds) {
+        const resident = await ctx.db.get(residentId);
+        if (resident && resident.guardianIds) {
+          const newGuardianIds = resident.guardianIds.filter((id: Id<"guardians">) => id !== args.guardianId);
+          await ctx.db.patch(residentId, { guardianIds: newGuardianIds });
+        }
+      }
+    }
+
+    // Delete all guardian_checklist_links for this guardian (by email)
+    const links = await ctx.db.query("guardian_checklist_links").collect();
+    for (const link of links) {
       if (link.guardianEmail === guardian.email) {
         await ctx.db.delete(link._id);
       }
     }
 
-    // 2. Delete the guardian record
     await ctx.db.delete(args.guardianId);
-    
-    await audit(ctx, "delete_guardian", userId, `guardianId=${args.guardianId},email=${guardian.email}`);
+    await audit(ctx, "delete_guardian", userId, `guardianId=${args.guardianId}`);
     return { success: true };
   },
 });
 
-// Delete resident (admin only) - CASCADE DELETE
+// Delete resident (admin only) - CASCADE
 export const deleteResident = mutation({
   args: { residentId: v.id("residents") },
   handler: async (ctx, args) => {
@@ -391,101 +404,72 @@ export const deleteResident = mutation({
     const resident = await ctx.db.get(args.residentId);
     if (!resident) throw new Error("Resident not found");
 
-    // 1. Delete all resident logs
-    const residentLogs = await ctx.db
-      .query("resident_logs")
-      .withIndex("by_residentId", (q) => q.eq("residentId", args.residentId))
-      .collect();
-    for (const log of residentLogs) {
+    // 1. Delete all resident_logs
+    const logs = await ctx.db.query("resident_logs").withIndex("by_residentId", (q) => q.eq("residentId", args.residentId)).collect();
+    for (const log of logs) {
       await ctx.db.delete(log._id);
     }
 
-    // 2. Delete all ISP files
-    const ispFiles = await ctx.db
-      .query("isp_files")
-      .withIndex("by_residentId", (q) => q.eq("residentId", args.residentId))
-      .collect();
-    for (const ispFile of ispFiles) {
-      if (ispFile.fileStorageId) {
-        await ctx.storage.delete(ispFile.fileStorageId);
+    // 2. Delete all audit_logs for this resident (by location or details)
+    const audits = await ctx.db.query("audit_logs").collect();
+    for (const auditLog of audits) {
+      if (
+        (auditLog.details && auditLog.details.includes(args.residentId)) ||
+        (auditLog.location && auditLog.location === resident.location)
+      ) {
+        await ctx.db.delete(auditLog._id);
       }
-      await ctx.db.delete(ispFile._id);
     }
 
-    // 3. Delete all ISP access logs
-    const ispAccessLogs = await ctx.db
-      .query("isp_access_logs")
-      .withIndex("by_residentId", (q) => q.eq("residentId", args.residentId))
-      .collect();
-    for (const log of ispAccessLogs) {
-      await ctx.db.delete(log._id);
-    }
-
-    // 4. Delete all ISP records
-    const ispRecords = await ctx.db
-      .query("isp")
-      .withIndex("by_residentId", (q) => q.eq("residentId", args.residentId))
-      .collect();
-    for (const isp of ispRecords) {
-      await ctx.db.delete(isp._id);
-    }
-
-    // 5. Delete all ISP acknowledgments
-    const ispAcks = await ctx.db
-      .query("isp_acknowledgments")
-      .withIndex("by_resident_and_user", (q) => q.eq("residentId", args.residentId))
-      .collect();
-    for (const ack of ispAcks) {
-      await ctx.db.delete(ack._id);
-    }
-
-    // 6. Delete all fire evacuation plans
-    const fireEvacPlans = await ctx.db
-      .query("fire_evac")
-      .withIndex("by_residentId", (q) => q.eq("residentId", args.residentId))
-      .collect();
-    for (const plan of fireEvacPlans) {
-      if (plan.fileStorageId) {
-        await ctx.storage.delete(plan.fileStorageId);
-      }
-      await ctx.db.delete(plan._id);
-    }
-
-    // 7. Delete all guardian checklist links
-    const checklistLinks = await ctx.db
-      .query("guardian_checklist_links")
-      .withIndex("by_residentId", (q) => q.eq("residentId", args.residentId))
-      .collect();
-    for (const link of checklistLinks) {
-      await ctx.db.delete(link._id);
-    }
-
-    // 8. Delete all compliance alerts for this resident
-    const complianceAlerts = await ctx.db.query("compliance_alerts").collect();
-    for (const alert of complianceAlerts) {
-      if (alert.metadata?.residentId === args.residentId) {
+    // 3. Delete all compliance_alerts for this resident's location
+    const alerts = await ctx.db.query("compliance_alerts").withIndex("by_location", (q) => q.eq("location", resident.location)).collect();
+    for (const alert of alerts) {
+      if (alert.metadata && alert.metadata.residentId === args.residentId) {
         await ctx.db.delete(alert._id);
       }
     }
 
-    // 9. Remove resident from guardian records
+    // 4. Delete all isp_files, isp, isp_access_logs, isp_acknowledgments
+    const ispFiles = await ctx.db.query("isp_files").withIndex("by_residentId", (q) => q.eq("residentId", args.residentId)).collect();
+    for (const file of ispFiles) {
+      await ctx.db.delete(file._id);
+    }
+    const isps = await ctx.db.query("isp").withIndex("by_residentId", (q) => q.eq("residentId", args.residentId)).collect();
+    for (const isp of isps) {
+      await ctx.db.delete(isp._id);
+    }
+    const ispAccessLogs = await ctx.db.query("isp_access_logs").withIndex("by_residentId", (q) => q.eq("residentId", args.residentId)).collect();
+    for (const log of ispAccessLogs) {
+      await ctx.db.delete(log._id);
+    }
+    const ispAcks = await ctx.db.query("isp_acknowledgments").withIndex("by_resident_and_user", (q) => q.eq("residentId", args.residentId)).collect();
+    for (const ack of ispAcks) {
+      await ctx.db.delete(ack._id);
+    }
+
+    // 5. Delete all fire_evac plans for this resident
+    const fireEvacs = await ctx.db.query("fire_evac").withIndex("by_residentId", (q) => q.eq("residentId", args.residentId)).collect();
+    for (const fe of fireEvacs) {
+      await ctx.db.delete(fe._id);
+    }
+
+    // 6. Delete all guardian_checklist_links for this resident
+    const checklistLinks = await ctx.db.query("guardian_checklist_links").withIndex("by_residentId", (q) => q.eq("residentId", args.residentId)).collect();
+    for (const link of checklistLinks) {
+      await ctx.db.delete(link._id);
+    }
+
+    // 7. Remove residentId from all guardians' residentIds arrays
     const guardians = await ctx.db.query("guardians").collect();
     for (const guardian of guardians) {
-      if (guardian.residentIds?.includes(args.residentId)) {
-        const updatedResidentIds = guardian.residentIds.filter(id => id !== args.residentId);
-        await ctx.db.patch(guardian._id, { residentIds: updatedResidentIds });
+      if (guardian.residentIds && guardian.residentIds.includes(args.residentId)) {
+        const newResidentIds = guardian.residentIds.filter((id: Id<"residents">) => id !== args.residentId);
+        await ctx.db.patch(guardian._id, { residentIds: newResidentIds });
       }
     }
 
-    // 10. Delete profile image if exists
-    if (resident.profileImageId) {
-      await ctx.storage.delete(resident.profileImageId);
-    }
-
-    // 11. Finally, delete the resident record
     await ctx.db.delete(args.residentId);
-
-    await audit(ctx, "delete_resident", userId, `residentId=${args.residentId},name=${resident.name}`);
+    await audit(ctx, "delete_resident", userId, `residentId=${args.residentId}`);
     return { success: true };
   },
 });

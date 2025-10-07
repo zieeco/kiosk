@@ -3,7 +3,6 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
-import { Resend } from "resend";
 
 // Helper: Audit
 async function audit(ctx: any, event: string, userId: Id<"users"> | null, details?: string) {
@@ -90,6 +89,12 @@ export const sendChecklistToGuardian = mutation({
     
     await audit(ctx, "send_guardian_checklist", userId, `linkId=${linkId}`);
     
+    // Schedule email action
+    await ctx.scheduler.runAfter(0, internal.complianceEmails.sendGuardianChecklistEmail, {
+      linkId,
+      token,
+    });
+    
     return { linkId, token };
   },
 });
@@ -168,6 +173,7 @@ export const listChecklistLinks = query({
         ...link,
         residentName: resident?.name || "Unknown",
         templateName: template?.name || "Unknown",
+        questions: template?.questions || [],
         expired: link.expiresAt < Date.now(),
       };
     });
@@ -189,50 +195,5 @@ export const internalGetChecklistLink = internalQuery({
       template,
       resident,
     };
-  },
-});
-
-// Send checklist email
-export const sendChecklistEmail = action({
-  args: {
-    linkId: v.id("guardian_checklist_links"),
-    token: v.string(),
-  },
-  handler: async (ctx, { linkId, token }) => {
-    const data = await ctx.runQuery(internal.guardianChecklists.internalGetChecklistLink, { linkId });
-    if (!data) throw new Error("Link not found");
-    
-    const { link, template, resident } = data;
-    const resend = new Resend(process.env.RESEND_API_KEY || process.env.CONVEX_RESEND_API_KEY);
-    
-    const checklistUrl = `${process.env.SITE_URL || "https://fleet-bobcat-14.convex.site"}/?checklist=${token}`;
-    
-    const { error } = await resend.emails.send({
-      from: "El-Elyon Properties <noreply@myezer.org>",
-      to: link.guardianEmail,
-      subject: `Guardian Checklist for ${resident?.name}`,
-      html: `
-        <div>
-          <h2>Guardian Checklist</h2>
-          <p>You have been sent a checklist to complete for <strong>${resident?.name}</strong>.</p>
-          <p>Template: <strong>${template?.name}</strong></p>
-          <p>
-            <a href="${checklistUrl}" style="background:#2563eb;color:white;padding:10px 20px;border-radius:6px;text-decoration:none;">
-              Complete Checklist
-            </a>
-          </p>
-          <p>If the button doesn't work, copy and paste this link:</p>
-          <p><code>${checklistUrl}</code></p>
-          <hr>
-          <p>This link will expire in 30 days.</p>
-        </div>
-      `,
-    });
-    
-    if (error) {
-      throw new Error("Failed to send email: " + JSON.stringify(error));
-    }
-    
-    return { success: true };
   },
 });

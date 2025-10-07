@@ -380,7 +380,6 @@ export const getAppSettings = query({
       alertHour: config?.alertHour || 9,
       alertMinute: config?.alertMinute || 0,
       selfieEnforced: config?.selfieEnforced || false,
-      requireClockInForAccess: config?.requireClockInForAccess ?? true,
     };
   },
 });
@@ -394,7 +393,6 @@ export const updateAppSettings = mutation({
     alertHour: v.optional(v.number()),
     alertMinute: v.optional(v.number()),
     selfieEnforced: v.optional(v.boolean()),
-    requireClockInForAccess: v.optional(v.boolean()),
   },
   handler: async (ctx, settings) => {
     const userId = await getAuthUserId(ctx);
@@ -413,7 +411,6 @@ export const updateAppSettings = mutation({
       if (settings.alertHour !== undefined) updates.alertHour = settings.alertHour;
       if (settings.alertMinute !== undefined) updates.alertMinute = settings.alertMinute;
       if (settings.selfieEnforced !== undefined) updates.selfieEnforced = settings.selfieEnforced;
-      if (settings.requireClockInForAccess !== undefined) updates.requireClockInForAccess = settings.requireClockInForAccess;
 
       await ctx.db.patch(config._id, updates);
     } else {
@@ -425,7 +422,6 @@ export const updateAppSettings = mutation({
         alertHour: settings.alertHour || 9,
         alertMinute: settings.alertMinute || 0,
         selfieEnforced: settings.selfieEnforced || false,
-        requireClockInForAccess: settings.requireClockInForAccess ?? true,
       });
     }
 

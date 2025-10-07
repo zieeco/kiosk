@@ -3,6 +3,8 @@ import { useQuery, useMutation } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { Id } from "../../convex/_generated/dataModel";
 import { toast } from "sonner";
+import ISPWorkspace from "./ISPWorkspace";
+import FireEvacManagement from "./FireEvacManagement";
 
 type StatusType = "ok" | "due-soon" | "overdue";
 
@@ -22,6 +24,10 @@ export default function ComplianceWorkspace() {
   });
   const [selectedItems, setSelectedItems] = useState<string[]>([]);
   const [showISPWorkspace, setShowISPWorkspace] = useState<{
+    residentId: Id<"residents">;
+    residentName: string;
+  } | null>(null);
+  const [showFireEvacManagement, setShowFireEvacManagement] = useState<{
     residentId: Id<"residents">;
     residentName: string;
   } | null>(null);
@@ -257,7 +263,10 @@ export default function ComplianceWorkspace() {
                     )}
                     {item.type === "fire_evac" && item.residentId && (
                       <button
-                        onClick={() => window.location.href = `/residents?id=${item.residentId}`}
+                        onClick={() => setShowFireEvacManagement({
+                          residentId: item.residentId as Id<"residents">,
+                          residentName: item.residentName || "Unknown Resident"
+                        })}
                         className="text-green-600 hover:text-green-900"
                       >
                         Manage Fire Evac
@@ -302,6 +311,31 @@ export default function ComplianceWorkspace() {
         </div>
       </div>
       {renderOverview()}
+
+      {/* ISP Workspace Modal */}
+      {showISPWorkspace && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-6xl w-full max-h-[90vh] overflow-y-auto">
+            <ISPWorkspace
+              residentId={showISPWorkspace.residentId}
+              residentName={showISPWorkspace.residentName}
+              onClose={() => setShowISPWorkspace(null)}
+            />
+          </div>
+        </div>
+      )}
+
+      {showFireEvacManagement && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+            <FireEvacManagement
+              residentId={showFireEvacManagement.residentId}
+              residentName={showFireEvacManagement.residentName}
+              onClose={() => setShowFireEvacManagement(null)}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

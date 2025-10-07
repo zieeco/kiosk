@@ -3,7 +3,6 @@ import KioskManagement from "./KioskManagement";
 import SystemSettings from "./SystemSettings";
 import SecuritySettings from "./SecuritySettings";
 import ComplianceSettings from "./ComplianceSettings";
-import DatabaseCleanup from "./DatabaseCleanup";
 
 const SETTINGS_SECTIONS = [
   {
@@ -33,13 +32,6 @@ const SETTINGS_SECTIONS = [
     description: "Manage security and access controls",
     icon: "🔒",
     color: "bg-red-50 border-red-200 text-red-700"
-  },
-  {
-    key: "cleanup",
-    title: "Database Cleanup",
-    description: "Clean up orphaned user records",
-    icon: "🗑️",
-    color: "bg-orange-50 border-orange-200 text-orange-700"
   }
 ];
 
@@ -110,23 +102,6 @@ export default function SettingsWorkspace() {
           <h3 className="text-2xl font-bold text-gray-900">Security Settings</h3>
         </div>
         <SecuritySettings />
-      </div>
-    );
-  }
-
-  if (activeSection === "cleanup") {
-    return (
-      <div className="space-y-6">
-        <div className="flex items-center space-x-4">
-          <button
-            onClick={() => setActiveSection(null)}
-            className="text-blue-600 hover:text-blue-800 text-sm font-medium"
-          >
-            ← Back to Settings
-          </button>
-          <h3 className="text-2xl font-bold text-gray-900">Database Cleanup</h3>
-        </div>
-        <DatabaseCleanup />
       </div>
     );
   }

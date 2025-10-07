@@ -448,7 +448,6 @@ export const completePairing = mutation({
   },
 });
 
-// Delete kiosk (admin only) - CASCADE DELETE
 export const deleteKiosk = mutation({
   args: {
     kioskId: v.id("kiosks"),
@@ -456,33 +455,17 @@ export const deleteKiosk = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
-    
     const kiosk = await ctx.db.get(args.kioskId);
     if (!kiosk) throw new Error("Kiosk not found");
-
-    // 1. Delete all shifts associated with this kiosk
-    const shifts = await ctx.db
-      .query("shifts")
-      .collect();
-    for (const shift of shifts) {
-      if (shift.kioskId === args.kioskId) {
-        await ctx.db.delete(shift._id);
-      }
-    }
-
-    // 2. Delete the kiosk record
     await ctx.db.delete(args.kioskId);
-    
-    // 3. Audit log
     await ctx.db.insert("audit_logs", {
       userId,
       event: "kiosk_deleted",
       timestamp: Date.now(),
       deviceId: kiosk.deviceId,
       location: kiosk.location,
-      details: `kioskId=${args.kioskId},deviceLabel=${kiosk.deviceLabel || "none"}`,
+      details: `kioskId=${args.kioskId}`,
     });
-    
     return { success: true };
   },
 });

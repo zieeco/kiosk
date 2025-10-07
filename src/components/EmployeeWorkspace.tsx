@@ -3,7 +3,6 @@ import { api } from "../../convex/_generated/api";
 import { useState } from "react";
 import { Id } from "../../convex/_generated/dataModel";
 import { toast } from "sonner";
-import ImprovedEmployeeCreation from "./ImprovedEmployeeCreation";
 
 export default function EmployeeWorkspace() {
   const userRole = useQuery(api.settings.getUserRole);
@@ -15,6 +14,7 @@ export default function EmployeeWorkspace() {
   const [selectedEmployee, setSelectedEmployee] = useState<Id<"employees"> | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [showEditForm, setShowEditForm] = useState(false);
+  const [loadingInvite, setLoadingInvite] = useState<Id<"employees"> | null>(null);
   const [deletingId, setDeletingId] = useState<Id<"employees"> | null>(null);
   const [activeTab, setActiveTab] = useState<"directory" | "activities" | "logs">("directory");
   const [selectedStaff, setSelectedStaff] = useState<string>("");
@@ -23,9 +23,14 @@ export default function EmployeeWorkspace() {
     to: new Date().toISOString().split('T')[0],
   });
 
+  const generateInvite = useMutation(api.employees.generateInviteLink);
+  const getInviteLink = useQuery(
+    api.employees.getInviteLink,
+    selectedEmployee ? { employeeId: selectedEmployee } : "skip"
+  );
+  const createEmployee = useMutation(api.employees.createEmployee);
   const deleteEmployee = useMutation(api.employees.deleteEmployee);
   const updateEmployee = useMutation(api.employees.updateEmployee);
-  const resendInvite = useMutation(api.employeesImproved.resendInvite);
 
   // Employee activities queries for admin - use the new queries that show ALL employees
   const allEmployees = useQuery(api.teams.getAllEmployees) || [];
@@ -39,9 +44,16 @@ export default function EmployeeWorkspace() {
     dateFrom: new Date(dateRange.from).getTime(),
     dateTo: new Date(dateRange.to).getTime() + 24 * 60 * 60 * 1000 - 1,
   });
-  
+
   // Get all logs for admin view
   const allLogs = useQuery(api.care.getResidentLogs, { limit: 200 });
+
+  const [newEmployeeForm, setNewEmployeeForm] = useState({
+    name: "",
+    email: "",
+    role: "staff" as "admin" | "supervisor" | "staff",
+    locations: [] as string[],
+  });
 
   const [editEmployeeForm, setEditEmployeeForm] = useState({
     name: "",
@@ -49,6 +61,62 @@ export default function EmployeeWorkspace() {
     role: "staff" as "admin" | "supervisor" | "staff",
     locations: [] as string[],
   });
+
+  async function handleGenerateInvite(employeeId: Id<"employees">) {
+    setLoadingInvite(employeeId);
+    try {
+      const result = await generateInvite({ employeeId });
+      setSelectedEmployee(employeeId);
+      toast.success("Invite generated! Email sending in background...");
+      if (result?.token) {
+        toast.info(`Invite token: ${result.token}`, { duration: 10000 });
+      }
+    } catch (error) {
+      toast.error("Failed to generate invite: " + (error as Error).message);
+    } finally {
+      setLoadingInvite(null);
+    }
+  }
+
+  function handleCopy(url: string) {
+    navigator.clipboard.writeText(url);
+    toast.success("Invite link copied to clipboard!");
+  }
+
+  async function handleAddEmployee(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newEmployeeForm.name.trim() || !newEmployeeForm.email.trim()) {
+      toast.error("Name and email are required");
+      return;
+    }
+    try {
+      await createEmployee({
+        name: newEmployeeForm.name.trim(),
+        email: newEmployeeForm.email.trim(),
+        role: newEmployeeForm.role,
+        locations: newEmployeeForm.locations,
+      });
+      setNewEmployeeForm({
+        name: "",
+        email: "",
+        role: "staff",
+        locations: [],
+      });
+      setShowAddForm(false);
+      toast.success("Employee added and invite email sent!");
+    } catch (error) {
+      toast.error("Failed to add employee");
+    }
+  }
+
+  const handleLocationToggle = (location: string) => {
+    setNewEmployeeForm(prev => ({
+      ...prev,
+      locations: prev.locations.includes(location)
+        ? prev.locations.filter(l => l !== location)
+        : [...prev.locations, location]
+    }));
+  };
 
   async function handleDeleteEmployee(employeeId: Id<"employees">) {
     if (!window.confirm("Are you sure you want to delete this employee? This action cannot be undone.")) {
@@ -89,7 +157,6 @@ export default function EmployeeWorkspace() {
   async function handleUpdateEmployee(e: React.FormEvent) {
     e.preventDefault();
     if (!selectedEmployee) return;
-    
     try {
       await updateEmployee({
         employeeId: selectedEmployee,
@@ -106,54 +173,38 @@ export default function EmployeeWorkspace() {
     }
   }
 
-  async function handleResendInvite(employeeId: Id<"employees">) {
-    try {
-      const result = await resendInvite({ employeeId });
-      toast.success(result.message || "Invite resent successfully!");
-    } catch (error: any) {
-      toast.error(error.message || "Failed to resend invite");
-    }
-  }
-
   const isAdmin = userRole?.role === "admin";
 
-  // Helper function to format log content like the dashboard
-  const formatLogContent = (content: string, template: string | undefined) => {
-    try {
-      const parsed = JSON.parse(content);
-      if (template === "daily_notes") {
-        return `Mood: ${parsed.mood || "N/A"}, Activities: ${parsed.activities || "N/A"}`;
-      } else if (template === "incident_report") {
-        return `${parsed.incident_type || "Incident"}: ${parsed.description || "No description"}`;
-      } else if (template === "medication_log") {
-        return `${parsed.medication || "Medication"} - ${parsed.dosage || "N/A"}`;
-      } else if (template === "care_plan_update") {
-        return `${parsed.area || "Care"}: ${parsed.update || "No update"}`;
-      }
-      return content.substring(0, 120) + (content.length > 120 ? "..." : "");
-    } catch {
-      return content.substring(0, 120) + (content.length > 120 ? "..." : "");
+  function renderUserStatus(emp: any) {
+    if (emp.hasAcceptedInvite) {
+      return (
+        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 ml-2">
+          User Registered
+        </span>
+      );
     }
-  };
+    return (
+      <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 ml-2">
+        Awaiting Signup
+      </span>
+    );
+  }
 
   const renderActivitiesTab = () => (
     <div className="space-y-6">
-      {/* Filters */}
       <div className="bg-white rounded-lg shadow-sm border p-6">
-        <h3 className="text-lg font-semibold mb-4">Activity Filters</h3>
+        <h3 className="text-lg font-semibold mb-4">Filter Activities</h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Employee</label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Staff Member</label>
             <select
               value={selectedStaff}
               onChange={(e) => setSelectedStaff(e.target.value)}
               className="w-full border border-gray-300 rounded-md px-3 py-2"
             >
-              <option value="">All employees</option>
-              {allEmployees.map((employee) => (
-                <option key={employee.id} value={employee.id}>
-                  {employee.name} ({employee.role})
-                </option>
+              <option value="">All Staff</option>
+              {allEmployees.map((emp: any) => (
+                <option key={emp.id} value={emp.id}>{emp.name}</option>
               ))}
             </select>
           </div>
@@ -178,84 +229,69 @@ export default function EmployeeWorkspace() {
         </div>
       </div>
 
-      {/* Employee Activities */}
-      <div className="bg-white rounded-lg shadow-sm border">
-        <div className="px-6 py-4 border-b border-gray-200">
-          <h3 className="text-lg font-semibold">Employee Activities</h3>
-        </div>
-        <div className="p-6">
-          {!employeeActivities || employeeActivities.length === 0 ? (
-            <div className="text-center py-8">
-              <div className="text-4xl mb-4">📊</div>
-              <p className="text-gray-500 text-lg font-medium mb-2">No activities found</p>
-              <p className="text-gray-400">Activities will appear here once employees start working</p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {employeeActivities.map((activity, index) => (
-                <div key={index} className="border border-gray-200 rounded-lg p-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="font-medium">{activity.authorName}</p>
-                      <p className="text-sm text-gray-600">{activity.template}</p>
-                      <p className="text-xs text-gray-500">{activity.location}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-sm text-gray-900">
-                        {new Date(activity.createdAt).toLocaleDateString()}
-                      </p>
-                      <p className="text-xs text-gray-500">
-                        {new Date(activity.createdAt).toLocaleTimeString()}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Shift Summary */}
-      {employeeShiftSummary && (
-        <div className="bg-white rounded-lg shadow-sm border">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <h3 className="text-lg font-semibold">Shift Summary</h3>
+      {employeeShiftSummary && employeeShiftSummary.length > 0 ? (
+        <div className="bg-white rounded-lg shadow-sm border p-6">
+          <h3 className="text-lg font-semibold mb-4">Shift Summary</h3>
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Staff</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Total Hours</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Shifts</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {employeeShiftSummary.map((summary: any) => (
+                  <tr key={summary.staffId}>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                      {summary.staffName || "Unknown"}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {(summary.totalHours || 0).toFixed(2)}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {summary.shiftCount || 0}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-          <div className="p-6">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              {Object.entries(employeeShiftSummary).map(([employeeId, summary]: [string, any]) => (
-                <div key={employeeId} className="border border-gray-200 rounded-lg p-4">
-                  <div className="flex items-center justify-between mb-4">
-                    <h4 className="font-medium">{summary.employeeName}</h4>
-                    <span className="text-sm text-gray-500">{summary.role}</span>
-                  </div>
-                  <div className="space-y-2">
-                    <div>
-                      <span className="font-medium text-gray-700">Total Hours:</span>
-                      <p className="text-gray-900">{(summary.totalHours || 0).toFixed(1)}h</p>
-                    </div>
-                    <div>
-                      <span className="font-medium text-gray-700">Shifts:</span>
-                      <p className="text-gray-900">{summary.shiftCount || 0}</p>
-                    </div>
-                    <div>
-                      <span className="font-medium text-gray-700">Locations:</span>
-                      <p className="text-gray-900">{(summary.locations || []).join(", ") || "None"}</p>
-                    </div>
-                    {summary.lastActivity && (
-                      <div>
-                        <span className="font-medium text-gray-700">Last Active:</span>
-                        <p className="text-gray-900">
-                          {new Date(summary.lastActivity).toLocaleDateString()}
-                        </p>
-                      </div>
+        </div>
+      ) : (
+        <div className="bg-white rounded-lg shadow-sm border p-6">
+          <h3 className="text-lg font-semibold mb-4">Shift Summary</h3>
+          <p className="text-gray-500 text-center py-8">No shift data available for the selected date range</p>
+        </div>
+      )}
+
+      {employeeActivities && employeeActivities.length > 0 ? (
+        <div className="bg-white rounded-lg shadow-sm border p-6">
+          <h3 className="text-lg font-semibold mb-4">Recent Activities</h3>
+          <div className="space-y-3">
+            {employeeActivities.map((activity: any) => (
+              <div key={activity.id} className="border-l-4 border-blue-500 pl-4 py-2">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <p className="font-medium text-gray-900">{activity.staffName}</p>
+                    <p className="text-sm text-gray-600">{activity.activityType}</p>
+                    {activity.details && (
+                      <p className="text-sm text-gray-500 mt-1">{activity.details}</p>
                     )}
                   </div>
+                  <span className="text-xs text-gray-500">
+                    {new Date(activity.timestamp).toLocaleString()}
+                  </span>
                 </div>
-              ))}
-            </div>
+              </div>
+            ))}
           </div>
+        </div>
+      ) : (
+        <div className="bg-white rounded-lg shadow-sm border p-6">
+          <h3 className="text-lg font-semibold mb-4">Recent Activities</h3>
+          <p className="text-gray-500 text-center py-8">No activities found for the selected filters</p>
         </div>
       )}
     </div>
@@ -266,8 +302,11 @@ export default function EmployeeWorkspace() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-semibold">
-          {activeTab === "directory" ? `Employees (${employees.length})` : 
-           activeTab === "activities" ? "Employee Activities" : "All Care Logs"}
+          {activeTab === "directory"
+            ? `Employees (${employees.length})`
+            : activeTab === "activities"
+            ? "Employee Activities"
+            : "All Care Logs"}
         </h2>
         {activeTab === "directory" && (
           <button
@@ -278,6 +317,14 @@ export default function EmployeeWorkspace() {
           </button>
         )}
       </div>
+
+      {/* Info note for admin */}
+      {activeTab === "directory" && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-blue-800 mb-2">
+          <b>Note:</b> Employees only become users after they accept their invite and sign up with the invited email address.
+          Until then, they will not appear in the users table and cannot log in.
+        </div>
+      )}
 
       {/* Tab Navigation - Only show for admins */}
       {isAdmin && (
@@ -308,100 +355,185 @@ export default function EmployeeWorkspace() {
       {/* Directory Tab Content */}
       {activeTab === "directory" && (
         <>
-          {/* Improved Add Employee Form */}
-          {showAddForm && (
-            <ImprovedEmployeeCreation
-              onSuccess={() => {
-                setShowAddForm(false);
-                toast.success("Employee invite sent successfully!");
-              }}
-              onCancel={() => setShowAddForm(false)}
-              availableLocations={availableLocations}
-            />
-          )}
-
           {/* Edit Employee Form */}
-          {showEditForm && (
-            <div className="bg-white rounded-lg shadow-sm border p-6">
+          {showEditForm && selectedEmployee && (
+            <div className="bg-white rounded-lg shadow-sm border p-6 mb-4">
               <h3 className="text-lg font-semibold mb-4">Edit Employee</h3>
               <form onSubmit={handleUpdateEmployee} className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Full Name *
-                    </label>
-                    <input
-                      type="text"
-                      value={editEmployeeForm.name}
-                      onChange={(e) => setEditEmployeeForm(prev => ({ ...prev, name: e.target.value }))}
-                      className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Work Email *
-                    </label>
-                    <input
-                      type="email"
-                      value={editEmployeeForm.email}
-                      onChange={(e) => setEditEmployeeForm(prev => ({ ...prev, email: e.target.value }))}
-                      className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      required
-                    />
-                  </div>
-                </div>
-                
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Role *
+                    Name <span className="text-red-500">*</span>
                   </label>
+                  <input
+                    type="text"
+                    value={editEmployeeForm.name}
+                    onChange={(e) => setEditEmployeeForm(prev => ({ ...prev, name: e.target.value }))}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Email <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="email"
+                    value={editEmployeeForm.email}
+                    onChange={(e) => setEditEmployeeForm(prev => ({ ...prev, email: e.target.value }))}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Role</label>
                   <select
                     value={editEmployeeForm.role}
                     onChange={(e) => setEditEmployeeForm(prev => ({ ...prev, role: e.target.value as any }))}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2"
                   >
                     <option value="staff">Staff</option>
                     <option value="supervisor">Supervisor</option>
                     <option value="admin">Admin</option>
                   </select>
                 </div>
-
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Assigned Locations
-                  </label>
-                  <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-                    {availableLocations.map((location: string) => (
-                      <label key={location} className="flex items-center space-x-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Locations</label>
+                  <div className="flex flex-wrap gap-2">
+                    {availableLocations.map((loc: string) => (
+                      <label
+                        key={loc}
+                        className={`px-3 py-1 rounded border cursor-pointer ${
+                          editEmployeeForm.locations.includes(loc)
+                            ? "bg-blue-100 border-blue-400"
+                            : "bg-white border-gray-300"
+                        }`}
+                      >
                         <input
                           type="checkbox"
-                          checked={editEmployeeForm.locations.includes(location)}
-                          onChange={() => handleEditLocationToggle(location)}
-                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          checked={editEmployeeForm.locations.includes(loc)}
+                          onChange={() => handleEditLocationToggle(loc)}
+                          className="mr-2"
                         />
-                        <span className="text-sm">{location}</span>
+                        {loc}
                       </label>
                     ))}
                   </div>
                 </div>
-
-                <div className="flex justify-end space-x-3">
+                <div className="flex gap-2">
+                  <button
+                    type="submit"
+                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+                  >
+                    Update Employee
+                  </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      setShowEditForm(false);
-                      setSelectedEmployee(null);
-                    }}
-                    className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 transition-colors"
+                    onClick={() => { setShowEditForm(false); setSelectedEmployee(null); }}
+                    className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors"
                   >
                     Cancel
                   </button>
+                </div>
+              </form>
+            </div>
+          )}
+
+          {/* Add Employee Form */}
+          {showAddForm && (
+            <div className="bg-white rounded-lg shadow-sm border p-6 mb-4">
+              <h3 className="text-lg font-semibold mb-4">Add New Employee</h3>
+              <form onSubmit={handleAddEmployee} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Name <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={newEmployeeForm.name}
+                    onChange={(e) =>
+                      setNewEmployeeForm((prev) => ({
+                        ...prev,
+                        name: e.target.value,
+                      }))
+                    }
+                    className="w-full border border-gray-300 rounded-md px-3 py-2"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Email <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="email"
+                    value={newEmployeeForm.email}
+                    onChange={(e) =>
+                      setNewEmployeeForm((prev) => ({
+                        ...prev,
+                        email: e.target.value,
+                      }))
+                    }
+                    className="w-full border border-gray-300 rounded-md px-3 py-2"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Role
+                  </label>
+                  <select
+                    value={newEmployeeForm.role}
+                    onChange={(e) =>
+                      setNewEmployeeForm((prev) => ({
+                        ...prev,
+                        role: e.target.value as "admin" | "supervisor" | "staff",
+                      }))
+                    }
+                    className="w-full border border-gray-300 rounded-md px-3 py-2"
+                  >
+                    <option value="staff">Staff</option>
+                    <option value="supervisor">Supervisor</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Locations
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {availableLocations.map((loc: string) => (
+                      <label
+                        key={loc}
+                        className={`px-3 py-1 rounded border cursor-pointer ${
+                          newEmployeeForm.locations.includes(loc)
+                            ? "bg-blue-100 border-blue-400"
+                            : "bg-white border-gray-300"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={newEmployeeForm.locations.includes(loc)}
+                          onChange={() => handleLocationToggle(loc)}
+                          className="mr-2"
+                        />
+                        {loc}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex gap-2">
                   <button
                     type="submit"
-                    className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
+                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
                   >
-                    Update Employee
+                    Add Employee
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowAddForm(false)}
+                    className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors"
+                  >
+                    Cancel
                   </button>
                 </div>
               </form>
@@ -413,7 +545,6 @@ export default function EmployeeWorkspace() {
             <div className="px-6 py-4 border-b border-gray-200">
               <h3 className="text-lg font-semibold">Employee Directory</h3>
             </div>
-            
             {employees.length === 0 ? (
               <div className="p-8 text-center text-gray-500">
                 <div className="text-4xl mb-4">👥</div>
@@ -424,62 +555,48 @@ export default function EmployeeWorkspace() {
               <div className="divide-y divide-gray-200">
                 {employees.map((emp) => (
                   <div key={emp.id} className="p-6">
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-start justify-between">
                       <div className="flex-1">
-                        <div className="flex items-center space-x-4">
-                          <div className="flex-1">
-                            <h4 className="text-lg font-medium text-gray-900">{emp.name}</h4>
-                            <p className="text-sm text-gray-600">{emp.workEmail}</p>
-                            <div className="flex items-center space-x-4 mt-2">
-                              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                                emp.role === "admin" ? "bg-red-100 text-red-800" :
-                                emp.role === "supervisor" ? "bg-yellow-100 text-yellow-800" :
-                                "bg-green-100 text-green-800"
-                              }`}>
-                                {emp.role || "staff"}
-                              </span>
-                              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                                emp.employmentStatus === "active" ? "bg-green-100 text-green-800" : 
-                                emp.employmentStatus === "pending" ? "bg-yellow-100 text-yellow-800" :
-                                "bg-gray-100 text-gray-800"
-                              }`}>
-                                {emp.employmentStatus === "active" ? "Active" : 
-                                 emp.employmentStatus === "pending" ? "Pending Invite" : "Inactive"}
-                              </span>
-                              {!emp.hasAcceptedInvite && (
-                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-800">
-                                  Invite Pending
-                                </span>
-                              )}
-                            </div>
-                            <div className="mt-2">
-                              <p className="text-sm text-gray-600">
-                                <span className="font-medium">Locations:</span> {emp.locations.join(", ") || "None assigned"}
-                              </p>
-                            </div>
-                          </div>
+                        <h4 className="text-lg font-medium text-gray-900">
+                          {emp.name}
+                          {renderUserStatus(emp)}
+                        </h4>
+                        <p className="text-sm text-gray-600 mt-1">{emp.email || emp.workEmail}</p>
+                        <div className="mt-2 flex items-center space-x-4 text-sm">
+                          <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs font-medium">
+                            {emp.role || "staff"}
+                          </span>
+                          <span className="text-gray-500">
+                            {emp.locations && emp.locations.length > 0 ? emp.locations.join(", ") : "No locations"}
+                          </span>
                         </div>
                       </div>
-                      
-                      <div className="flex items-center space-x-3">
-                        {!emp.hasAcceptedInvite && (
-                          <button
-                            onClick={() => handleResendInvite(emp.id)}
-                            className="px-3 py-1 text-sm bg-orange-100 text-orange-700 rounded hover:bg-orange-200 transition-colors"
-                          >
-                            Resend Invite
-                          </button>
-                        )}
+                      <div className="flex flex-col space-y-2 ml-4">
                         <button
                           onClick={() => handleEditEmployee(emp)}
-                          className="px-3 py-1 text-sm bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition-colors"
+                          className="px-3 py-1 text-sm text-blue-600 hover:text-blue-800 border border-blue-300 rounded hover:bg-blue-50 whitespace-nowrap"
                         >
                           Edit
                         </button>
                         <button
+                          onClick={() => handleGenerateInvite(emp.id)}
+                          disabled={loadingInvite === emp.id}
+                          className="px-3 py-1 text-sm text-green-600 hover:text-green-800 border border-green-300 rounded hover:bg-green-50 disabled:opacity-50 whitespace-nowrap"
+                        >
+                          {loadingInvite === emp.id ? "Generating..." : "Generate Link"}
+                        </button>
+                        {selectedEmployee === emp.id && getInviteLink && (
+                          <button
+                            onClick={() => handleCopy(getInviteLink.url)}
+                            className="px-3 py-1 text-sm text-purple-600 hover:text-purple-800 border border-purple-300 rounded hover:bg-purple-50 whitespace-nowrap"
+                          >
+                            Copy Link
+                          </button>
+                        )}
+                        <button
                           onClick={() => handleDeleteEmployee(emp.id)}
-                          className="px-3 py-1 text-sm bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors"
                           disabled={deletingId === emp.id}
+                          className="px-3 py-1 text-sm text-red-600 hover:text-red-800 border border-red-300 rounded hover:bg-red-50 disabled:opacity-50 whitespace-nowrap"
                         >
                           {deletingId === emp.id ? "Deleting..." : "Delete"}
                         </button>
@@ -498,59 +615,28 @@ export default function EmployeeWorkspace() {
 
       {/* All Logs Tab Content */}
       {activeTab === "logs" && isAdmin && (
-        <div className="bg-white rounded-lg shadow-sm border">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <h3 className="text-lg font-semibold">All Care Logs ({(allLogs || []).length})</h3>
-          </div>
-          <div className="p-6">
-            {!allLogs || allLogs.length === 0 ? (
-              <div className="text-center py-8">
-                <div className="text-4xl mb-4">📝</div>
-                <p className="text-gray-500 text-lg font-medium mb-2">No logs found</p>
-                <p className="text-gray-400">Care logs will appear here once staff start documenting</p>
-              </div>
-            ) : (
-              <div className="space-y-4 max-h-96 overflow-y-auto">
-                {allLogs.slice(0, 100).map((log) => (
-                  <div key={log.id} className="border-l-4 border-blue-200 pl-4 hover:bg-gray-50 transition-colors rounded-r-lg py-3">
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="text-lg">
-                            {log.template === "daily_notes" ? "📝" : 
-                             log.template === "incident_report" ? "⚠️" : 
-                             log.template === "medication_log" ? "💊" : 
-                             log.template === "care_plan_update" ? "📋" : "📄"}
-                          </span>
-                          <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                            log.template === "daily_notes" ? "bg-blue-100 text-blue-800" :
-                            log.template === "incident_report" ? "bg-red-100 text-red-800" :
-                            log.template === "medication_log" ? "bg-green-100 text-green-800" :
-                            log.template === "care_plan_update" ? "bg-purple-100 text-purple-800" :
-                            "bg-gray-100 text-gray-800"
-                          }`}>
-                            {log.template?.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) || "Unknown"}
-                          </span>
-
-                        </div>
-                        <p className="font-medium text-sm">{log.residentName}</p>
-                        <p className="text-xs text-gray-600 mb-2">{log.residentLocation}</p>
-                        <p className="text-sm text-gray-700">
-                          {formatLogContent(log.content, log.template)}
-                        </p>
-                      </div>
-                      <div className="text-right ml-4">
-                        <p className="text-xs text-gray-500">
-                          {log.authorName}
-                        </p>
-                        <p className="text-xs text-gray-400">
-                          {log.createdAt ? new Date(log.createdAt).toLocaleDateString() : "N/A"}
-                        </p>
-                      </div>
+        <div className="bg-white rounded-lg shadow-sm border p-6">
+          <h3 className="text-lg font-semibold mb-4">All Care Logs</h3>
+          <div className="space-y-3">
+            {allLogs && allLogs.length > 0 ? (
+              allLogs.map((log: any) => (
+                <div key={log.id} className="border-l-4 border-green-500 pl-4 py-2">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <p className="font-medium text-gray-900">{log.residentName}</p>
+                      <p className="text-sm text-gray-600">
+                        {log.template} - by {log.authorName}
+                      </p>
+                      <p className="text-sm text-gray-500 mt-1">{log.content.substring(0, 100)}...</p>
                     </div>
+                    <span className="text-xs text-gray-500">
+                      {new Date(log.createdAt).toLocaleString()}
+                    </span>
                   </div>
-                ))}
-              </div>
+                </div>
+              ))
+            ) : (
+              <p className="text-gray-500 text-center py-8">No logs found</p>
             )}
           </div>
         </div>

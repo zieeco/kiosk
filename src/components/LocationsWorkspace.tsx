@@ -32,16 +32,10 @@ export default function LocationsWorkspace() {
   async function handleSyncLocations() {
     setIsSyncing(true);
     try {
-      const result = await syncLocations();
-      if (result.created > 0) {
-        toast.success(
-          `Successfully synced ${result.created} location(s)! Found ${result.totalFound} total locations, ${result.alreadyExisted} already existed.`
-        );
-      } else {
-        toast.info(
-          `All ${result.totalFound} location(s) are already synced. No new locations to add.`
-        );
-      }
+      // Get all unique location names from residents, shifts, etc.
+      const locationNames: string[] = [];
+      await syncLocations({ locationNames });
+      toast.success("Locations synced successfully!");
     } catch (error: any) {
       toast.error("Failed to sync locations: " + (error.message || "Unknown error"));
     } finally {

@@ -16,7 +16,7 @@ export default function CareShiftWorkspace() {
   const [selfieAction, setSelfieAction] = useState<"clockIn" | "clockOut" | null>(null);
   const [currentTime, setCurrentTime] = useState(Date.now());
 
-  // Update current time every second to refresh the duration display
+  // Update current time every second for live duration display
   useEffect(() => {
     const interval = setInterval(() => {
       setCurrentTime(Date.now());
@@ -54,14 +54,7 @@ export default function CareShiftWorkspace() {
   const handleClockOut = async () => {
     if (!currentShift) return;
 
-    // Check if selfie is required
-    if (isSelfieEnforced) {
-      setSelfieAction("clockOut");
-      setShowSelfieCapture(true);
-      return;
-    }
-
-    // Proceed without selfie
+    // Clock out without selfie requirement
     setIsProcessing(true);
     try {
       await clockOut({});
@@ -77,23 +70,18 @@ export default function CareShiftWorkspace() {
     setShowSelfieCapture(false);
     setIsProcessing(true);
     try {
-      if (selfieAction === "clockIn") {
-        await clockIn({ location: sessionInfo!.locations[0], selfieStorageId: storageId });
-        toast.success("Clocked in with selfie");
-      } else {
-        await clockOut({ selfieStorageId: storageId });
-        toast.success("Clocked out with selfie");
-      }
+      await clockIn({ location: sessionInfo!.locations[0], selfieStorageId: storageId });
+      toast.success("Clocked in with selfie");
     } catch (error: any) {
-      toast.error(error.message || "Failed");
+      toast.error(error.message || "Failed to clock in");
     } finally {
       setIsProcessing(false);
       setSelfieAction(null);
     }
   };
 
-  const formatDuration = (startTime: number, now: number) => {
-    const duration = now - startTime;
+  const formatDuration = (startTime: number) => {
+    const duration = currentTime - startTime;
     const hours = Math.floor(duration / (1000 * 60 * 60));
     const minutes = Math.floor((duration % (1000 * 60 * 60)) / (1000 * 60));
     const seconds = Math.floor((duration % (1000 * 60)) / 1000);
@@ -134,7 +122,7 @@ export default function CareShiftWorkspace() {
                   Location: {currentShift.location}
                 </p>
                 <p className="text-lg font-semibold text-gray-900">
-                  Duration: {formatDuration(currentShift.clockInTime, currentTime)}
+                  Duration: {formatDuration(currentShift.clockInTime)}
                 </p>
               </div>
 

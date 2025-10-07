@@ -42,6 +42,7 @@ export const getMyResidents = query({
     
     const userRole = await requireCareAccess(ctx, userId);
     
+    // Admin can see all residents
     if (userRole.role === "admin") {
       const residents = await ctx.db.query("residents").collect();
       return residents.map(resident => ({
@@ -53,6 +54,7 @@ export const getMyResidents = query({
       }));
     }
     
+    // Staff and supervisors see residents in their assigned locations
     const userLocations = userRole.locations || [];
     if (userLocations.length === 0) {
       return [];
@@ -89,9 +91,11 @@ export const getResidentLogs = query({
     let logs;
     
     if (args.residentId) {
+      // Get logs for specific resident
       const resident = await ctx.db.get(args.residentId);
       if (!resident) throw new Error("Resident not found");
       
+      // Check if user has access to this resident's location
       if (userRole.role !== "admin" && !userLocations.includes(resident.location)) {
         throw new Error("Access denied to this resident's logs");
       }
@@ -102,6 +106,7 @@ export const getResidentLogs = query({
         .order("desc")
         .take(args.limit || 50);
     } else {
+      // Get all logs for user's accessible locations
       const allLogs = await ctx.db
         .query("resident_logs")
         .order("desc")
@@ -110,6 +115,7 @@ export const getResidentLogs = query({
       if (userRole.role === "admin") {
         logs = allLogs;
       } else {
+        // Filter logs by accessible residents
         const residents = await ctx.db.query("residents").collect();
         const accessibleResidentIds = residents
           .filter(r => userLocations.includes(r.location))
@@ -121,6 +127,7 @@ export const getResidentLogs = query({
       }
     }
     
+    // Get additional data for each log
     const users = await ctx.db.query("users").collect();
     const residents = await ctx.db.query("residents").collect();
     
@@ -158,6 +165,7 @@ export const getRecentLogsSummary = query({
     const userRole = await requireCareAccess(ctx, userId);
     const userLocations = userRole.role === "admin" ? [] : (userRole.locations || []);
     
+    // Get logs from last 7 days
     const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
     const recentLogs = await ctx.db
       .query("resident_logs")
@@ -168,6 +176,7 @@ export const getRecentLogsSummary = query({
     let filteredLogs = recentLogs;
     
     if (userRole.role !== "admin") {
+      // Filter by accessible locations
       const residents = await ctx.db.query("residents").collect();
       const accessibleResidentIds = residents
         .filter(r => userLocations.includes(r.location))
@@ -178,6 +187,7 @@ export const getRecentLogsSummary = query({
       );
     }
     
+    // Group by location and template
     const summary = {
       totalLogs: filteredLogs.length,
       logsByLocation: {} as Record<string, number>,
@@ -214,6 +224,7 @@ export const createResidentLog = mutation({
     
     const userRole = await requireCareAccess(ctx, userId);
     
+    // Check if resident exists and user has access
     const resident = await ctx.db.get(args.residentId);
     if (!resident) throw new Error("Resident not found");
     
@@ -222,6 +233,7 @@ export const createResidentLog = mutation({
       throw new Error("Access denied to create logs for this resident");
     }
     
+    // Get the next version number for this resident
     const existingLogs = await ctx.db
       .query("resident_logs")
       .withIndex("by_residentId", (q) => q.eq("residentId", args.residentId))
@@ -255,6 +267,7 @@ export const getLogTemplates = query({
     
     await requireCareAccess(ctx, userId);
     
+    // Return predefined templates - could be made configurable later
     return [
       {
         id: "daily_notes",
@@ -328,6 +341,7 @@ export const searchLogs = query({
       .order("desc")
       .take(args.limit || 100);
     
+    // Filter by user's accessible locations
     if (userRole.role !== "admin") {
       const residents = await ctx.db.query("residents").collect();
       const accessibleResidentIds = residents
@@ -337,6 +351,7 @@ export const searchLogs = query({
       logs = logs.filter(log => accessibleResidentIds.includes(log.residentId));
     }
     
+    // Apply filters
     if (args.residentId) {
       logs = logs.filter(log => log.residentId === args.residentId);
     }
@@ -353,6 +368,7 @@ export const searchLogs = query({
       logs = logs.filter(log => log.createdAt && log.createdAt <= args.dateTo!);
     }
     
+    // Search in content
     if (args.query.trim()) {
       const searchTerm = args.query.toLowerCase();
       logs = logs.filter(log => 
@@ -361,6 +377,7 @@ export const searchLogs = query({
       );
     }
     
+    // Enrich with additional data
     const users = await ctx.db.query("users").collect();
     const residents = await ctx.db.query("residents").collect();
     
@@ -392,15 +409,6 @@ export const isSelfieEnforced = query({
   handler: async (ctx) => {
     const config = await ctx.db.query("config").first();
     return config?.selfieEnforced || false;
-  },
-});
-
-// Query: Check if clock-in is required for access
-export const isClockInRequired = query({
-  args: {},
-  handler: async (ctx) => {
-    const config = await ctx.db.query("config").first();
-    return config?.requireClockInForAccess ?? true;
   },
 });
 
@@ -449,6 +457,7 @@ export const clockIn = mutation({
     
     const userRole = await requireCareAccess(ctx, userId);
     
+    // Check if selfie is enforced
     const config = await ctx.db.query("config").first();
     if (config?.selfieEnforced && !args.selfieStorageId) {
       throw new Error("Selfie verification is required for clock in");
@@ -487,6 +496,8 @@ export const clockOut = mutation({
     if (!userId) throw new Error("Not authenticated");
     
     await requireCareAccess(ctx, userId);
+    
+    // Note: Selfie is NOT required for clock out, only for clock in
     
     const currentShift = await ctx.db
       .query("shifts")

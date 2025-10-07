@@ -16,21 +16,19 @@ export function SignOutButton() {
 
   const handleSignOut = async () => {
     if (currentShift) {
-      const confirmed = confirm(
-        "You are currently clocked in. Would you like to clock out before signing out?\n\nClick OK to clock out and sign out.\nClick Cancel to sign out without clocking out."
+      const confirmed = window.confirm(
+        "You are currently clocked in. Signing out will automatically clock you out. Do you want to continue?"
       );
-      if (confirmed) {
-        try {
-          await clockOut({});
-          toast.success("Clocked out successfully");
-        } catch (error: any) {
-          console.error("Failed to clock out:", error);
-          toast.error(error.message || "Failed to clock out");
-          return;
-        }
+      if (!confirmed) return;
+      try {
+        await clockOut({});
+        toast.success("Clocked out successfully");
+      } catch (error: any) {
+        toast.error("Failed to clock out: " + (error.message || "Unknown error"));
+        return;
       }
     }
-    await signOut();
+    void signOut();
   };
 
   return (

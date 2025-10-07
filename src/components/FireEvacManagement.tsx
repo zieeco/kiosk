@@ -7,9 +7,10 @@ import { toast } from "sonner";
 type Props = {
   residentId: Id<"residents">;
   residentName: string;
+  onClose?: () => void;
 };
 
-export default function FireEvacManagement({ residentId, residentName }: Props) {
+export default function FireEvacManagement({ residentId, residentName, onClose }: Props) {
   const fireEvacPlans = useQuery(api.fireEvac.getResidentFireEvacPlans, { residentId }) || [];
   const generateUploadUrl = useMutation(api.fireEvac.generateFireEvacUploadUrl);
   const saveFireEvacPlan = useMutation(api.fireEvac.saveResidentFireEvacPlan);
@@ -123,15 +124,25 @@ export default function FireEvacManagement({ residentId, residentName }: Props) 
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-semibold">Fire Evacuation Plans</h3>
+          <h3 className="text-lg font-semibold">Fire Evacuation Plans - {residentName}</h3>
           <p className="text-sm text-gray-600">Plans are renewed annually</p>
         </div>
-        <button
-          onClick={() => setShowUploadForm(!showUploadForm)}
-          className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
-        >
-          {showUploadForm ? "Cancel" : "Upload New Plan"}
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setShowUploadForm(!showUploadForm)}
+            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+          >
+            {showUploadForm ? "Cancel" : "Upload New Plan"}
+          </button>
+          {onClose && (
+            <button
+              onClick={onClose}
+              className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors"
+            >
+              Close
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Upload Form */}

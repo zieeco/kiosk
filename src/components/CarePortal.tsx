@@ -12,13 +12,11 @@ import SupervisorComplianceWorkspace from "./SupervisorComplianceWorkspace";
 export default function CarePortal() {
   const [activeView, setActiveView] = useState("shift");
   const sessionInfo = useQuery(api.access.getSessionInfo);
-  const currentShift = useQuery(api.care.getCurrentShift);
-  const isClockInRequired = useQuery(api.care.isClockInRequired);
   const logActivity = useMutation(api.access.logSessionActivity);
+  const currentShift = useQuery(api.care.getCurrentShift);
 
   const isSupervisor = sessionInfo?.role === "supervisor";
   const isClockedIn = !!currentShift;
-  const requireClockIn = isClockInRequired ?? true;
 
   const navigationItems = [
     { id: "shift", label: "Shift", icon: "⏰", description: "Clock in/out" },
@@ -41,6 +39,10 @@ export default function CarePortal() {
   };
 
   const renderContent = () => {
+    // If not clocked in, always show shift workspace
+    if (!isClockedIn) {
+      return <CareShiftWorkspace />;
+    }
     switch (activeView) {
       case "shift":
         return <CareShiftWorkspace />;
@@ -80,49 +82,27 @@ export default function CarePortal() {
 
         {/* Navigation */}
         <nav className="flex-1 p-4 space-y-2">
-          {/* Clock-in reminder if not clocked in and required */}
-          {requireClockIn && !isClockedIn && (
-            <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
-              <div className="flex items-start">
-                <span className="text-amber-600 mr-2">⚠️</span>
-                <div className="text-sm text-amber-800">
-                  <p className="font-medium">Clock in to access features</p>
-                  <p className="text-xs mt-1">You must clock in before accessing residents, logs, and other features.</p>
-                </div>
-              </div>
-            </div>
-          )}
-
           {/* Main Navigation */}
           <div className="space-y-1">
-            {navigationItems.map((item) => {
-              const isDisabled = requireClockIn && !isClockedIn && item.id !== "shift";
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => !isDisabled && handleNavigation(item.id)}
-                  disabled={isDisabled}
-                  className={`w-full flex items-center px-3 py-3 text-left rounded-lg transition-colors ${
-                    activeView === item.id
-                      ? "bg-blue-50 text-blue-700 border border-blue-200"
-                      : isDisabled
-                      ? "text-gray-400 bg-gray-50 cursor-not-allowed opacity-60"
-                      : "text-gray-700 hover:bg-gray-50"
-                  }`}
-                >
-                  <span className="text-lg mr-3" role="img" aria-label={item.label}>
-                    {item.icon}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <div className="font-medium">{item.label}</div>
-                    <div className="text-xs text-gray-500 truncate">{item.description}</div>
-                  </div>
-                  {isDisabled && (
-                    <span className="text-xs text-gray-400">🔒</span>
-                  )}
-                </button>
-              );
-            })}
+            {navigationItems.map((item) => (
+              <button
+                key={item.id}
+                onClick={() => handleNavigation(item.id)}
+                className={`w-full flex items-center px-3 py-3 text-left rounded-lg transition-colors ${activeView === item.id
+                  ? "bg-blue-50 text-blue-700 border border-blue-200"
+                  : "text-gray-700 hover:bg-gray-50"
+                } ${!isClockedIn && item.id !== "shift" ? "opacity-50 cursor-not-allowed" : ""}`}
+                disabled={!isClockedIn && item.id !== "shift"}
+              >
+                <span className="text-lg mr-3" role="img" aria-label={item.label}>
+                  {item.icon}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium">{item.label}</div>
+                  <div className="text-xs text-gray-500 truncate">{item.description}</div>
+                </div>
+              </button>
+            ))}
           </div>
 
           {/* Supervisor Tools */}
@@ -132,34 +112,25 @@ export default function CarePortal() {
                 Supervisor Tools
               </div>
               <div className="space-y-1">
-                {supervisorItems.map((item) => {
-                  const isDisabled = requireClockIn && !isClockedIn;
-                  return (
-                    <button
-                      key={item.id}
-                      onClick={() => !isDisabled && handleNavigation(item.id)}
-                      disabled={isDisabled}
-                      className={`w-full flex items-center px-3 py-3 text-left rounded-lg transition-colors ${
-                        activeView === item.id
-                          ? "bg-purple-50 text-purple-700 border border-purple-200"
-                          : isDisabled
-                          ? "text-gray-400 bg-gray-50 cursor-not-allowed opacity-60"
-                          : "text-gray-700 hover:bg-gray-50"
-                      }`}
-                    >
-                      <span className="text-lg mr-3" role="img" aria-label={item.label}>
-                        {item.icon}
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        <div className="font-medium">{item.label}</div>
-                        <div className="text-xs text-gray-500 truncate">{item.description}</div>
-                      </div>
-                      {isDisabled && (
-                        <span className="text-xs text-gray-400">🔒</span>
-                      )}
-                    </button>
-                  );
-                })}
+                {supervisorItems.map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => handleNavigation(item.id)}
+                    className={`w-full flex items-center px-3 py-3 text-left rounded-lg transition-colors ${activeView === item.id
+                      ? "bg-purple-50 text-purple-700 border border-purple-200"
+                      : "text-gray-700 hover:bg-gray-50"
+                    } ${!isClockedIn ? "opacity-50 cursor-not-allowed" : ""}`}
+                    disabled={!isClockedIn}
+                  >
+                    <span className="text-lg mr-3" role="img" aria-label={item.label}>
+                      {item.icon}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium">{item.label}</div>
+                      <div className="text-xs text-gray-500 truncate">{item.description}</div>
+                    </div>
+                  </button>
+                ))}
               </div>
             </div>
           )}
@@ -174,6 +145,11 @@ export default function CarePortal() {
       {/* Main Content */}
       <main className="flex-1 overflow-y-auto">
         <div className="p-8">
+          {!isClockedIn && (
+            <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded text-yellow-800 text-center font-medium">
+              You must clock in to access the rest of the Care Portal.
+            </div>
+          )}
           {renderContent()}
         </div>
       </main>

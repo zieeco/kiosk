@@ -32,10 +32,10 @@ export default function AdminDashboard({ onNavigate }: AdminDashboardProps) {
       color: "bg-purple-50 text-purple-700 border-purple-200"
     },
     {
-      title: "Active Employees",
-      value: employees.filter(emp => emp.employmentStatus === "active").length,
-      icon: "✅",
-      color: "bg-green-50 text-green-700 border-green-200"
+      title: "Pending Invites",
+      value: employees.filter(emp => !emp.hasAcceptedInvite).length,
+      icon: "📧",
+      color: "bg-yellow-50 text-yellow-700 border-yellow-200"
     },
     {
       title: "Active Locations",
@@ -46,8 +46,8 @@ export default function AdminDashboard({ onNavigate }: AdminDashboardProps) {
   ];
 
   const recentEmployees = employees
-    .filter(emp => emp.onboardedAt)
-    .sort((a, b) => (b.onboardedAt || 0) - (a.onboardedAt || 0))
+    .filter(emp => emp.invitedAt)
+    .sort((a, b) => (b.invitedAt || 0) - (a.invitedAt || 0))
     .slice(0, 5);
 
   const recentResidents = residents
@@ -131,14 +131,14 @@ export default function AdminDashboard({ onNavigate }: AdminDashboardProps) {
                     </div>
                     <div className="text-right">
                       <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                        employee.employmentStatus === "active"
+                        employee.hasAcceptedInvite 
                           ? "bg-green-100 text-green-800" 
-                          : "bg-gray-100 text-gray-800"
+                          : "bg-yellow-100 text-yellow-800"
                       }`}>
-                        {employee.employmentStatus === "active" ? "Active" : "Inactive"}
+                        {employee.hasAcceptedInvite ? "Accepted" : "Pending"}
                       </span>
                       <p className="text-xs text-gray-500 mt-1">
-                        {employee.onboardedAt ? new Date(employee.onboardedAt).toLocaleDateString() : ""}
+                        {employee.invitedAt ? new Date(employee.invitedAt).toLocaleDateString() : ""}
                       </p>
                     </div>
                   </div>
@@ -159,27 +159,27 @@ export default function AdminDashboard({ onNavigate }: AdminDashboardProps) {
             ) : (
               <div className="space-y-4">
                 {recentLogs.slice(0, 5).map((log) => (
-                  <div key={log.id} className="border-l-4 border-blue-200 pl-4">
+                  <div key={log._id} className="border-l-4 border-blue-200 pl-4">
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
                         <div className="flex items-center gap-2 mb-1">
                           <span className="text-lg">{getTemplateIcon(log.template || "")}</span>
                           <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${getTemplateColor(log.template || "")}`}>
-                            {log.template?.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) || "Unknown"}
+                            {log.template?.replace(/_/g, ' ').replace(/\b\w/g, (l: string) => l.toUpperCase()) || "Unknown"}
                           </span>
                         </div>
-                        <p className="font-medium text-sm">{log.residentName}</p>
-                        <p className="text-xs text-gray-600 mb-2">{log.residentLocation}</p>
+                        <p className="font-medium text-sm">Resident Log</p>
+                        <p className="text-xs text-gray-600 mb-2">{log.location || "Unknown"}</p>
                         <p className="text-sm text-gray-700">
                           {formatLogContent(log.content, log.template || "")}
                         </p>
                       </div>
                       <div className="text-right ml-4">
                         <p className="text-xs text-gray-500">
-                          {log.authorName}
+                          Staff
                         </p>
                         <p className="text-xs text-gray-400">
-                          {new Date(log.createdAt).toLocaleDateString()}
+                          {new Date(log.createdAt || log._creationTime).toLocaleDateString()}
                         </p>
                       </div>
                     </div>

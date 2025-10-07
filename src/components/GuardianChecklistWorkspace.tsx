@@ -16,7 +16,6 @@ export default function GuardianChecklistWorkspace() {
 
   const createTemplate = useMutation(api.guardianChecklists.createChecklistTemplate);
   const sendChecklist = useMutation(api.guardianChecklists.sendChecklistToGuardian);
-  const sendEmail = useAction(api.guardianChecklists.sendChecklistEmail);
   const resendLink = useMutation(api.compliance.resendGuardianLink);
 
   const [templateForm, setTemplateForm] = useState({
@@ -93,15 +92,13 @@ export default function GuardianChecklistWorkspace() {
     }
 
     try {
-      const result = await sendChecklist({
+      await sendChecklist({
         residentId: sendForm.residentId as Id<"residents">,
         templateId: sendForm.templateId as Id<"guardian_checklist_templates">,
         guardianEmail: sendForm.guardianEmail,
       });
 
-      await sendEmail({ linkId: result.linkId, token: result.token });
-
-      toast.success("Checklist sent successfully!");
+      toast.success("Checklist sent successfully! Email will be delivered shortly.");
       setSendForm({ residentId: "", templateId: "", guardianEmail: "" });
       setShowSendChecklist(false);
     } catch (error: any) {
@@ -111,121 +108,31 @@ export default function GuardianChecklistWorkspace() {
 
   const handleResendLink = async (linkId: Id<"guardian_checklist_links">) => {
     try {
-      const result = await resendLink({ linkId });
-      await sendEmail({ linkId, token: result.token });
-      toast.success("Checklist link resent successfully!");
+      await resendLink({ linkId });
+      toast.success("Checklist link resent successfully! Email will be delivered shortly.");
     } catch (error: any) {
       toast.error(error.message || "Failed to resend link");
     }
   };
 
   const handleCopyLink = (token: string) => {
-    // Use the current site URL or fallback to deployment URL
-    const baseUrl = window.location.origin || 'https://fleet-bobcat-14.convex.app';
-    const url = `${baseUrl}/?checklist=${token}`;
+    const url = `https://fleet-bobcat-14.convex.app/?checklist=${token}`;
     navigator.clipboard.writeText(url);
     toast.success("Link copied to clipboard!");
   };
 
-  const getAnswerDisplay = (answer: any, questionType: string) => {
+  const formatAnswer = (answer: any, questionType: string) => {
     if (questionType === "yes_no") {
       return answer ? "Yes" : "No";
     }
     if (questionType === "rating") {
-      return `${answer} / 5`;
+      return `${answer}/5`;
     }
     return answer;
   };
 
   return (
     <div className="space-y-6">
-      {/* Response Viewer Modal */}
-      {viewingResponses && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
-              <h3 className="text-xl font-semibold">Guardian Checklist Responses</h3>
-              <button
-                onClick={() => setViewingResponses(null)}
-                className="text-gray-400 hover:text-gray-600"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-
-            <div className="px-6 py-4 space-y-6">
-              {/* Checklist Info */}
-              <div className="bg-gray-50 rounded-lg p-4 space-y-2">
-                <div className="flex justify-between">
-                  <span className="text-sm font-medium text-gray-700">Resident:</span>
-                  <span className="text-sm text-gray-900">{viewingResponses.residentName}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-sm font-medium text-gray-700">Template:</span>
-                  <span className="text-sm text-gray-900">{viewingResponses.templateName}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-sm font-medium text-gray-700">Guardian Email:</span>
-                  <span className="text-sm text-gray-900">{viewingResponses.guardianEmail}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-sm font-medium text-gray-700">Completed:</span>
-                  <span className="text-sm text-gray-900">
-                    {viewingResponses.completedAt
-                      ? new Date(viewingResponses.completedAt).toLocaleString()
-                      : "N/A"}
-                  </span>
-                </div>
-              </div>
-
-              {/* Responses */}
-              <div className="space-y-4">
-                <h4 className="font-semibold text-gray-900">Responses</h4>
-                {viewingResponses.responses && viewingResponses.responses.length > 0 ? (
-                  viewingResponses.responses.map((response: any, index: number) => {
-                    // Find the template to get question details
-                    const template = templates.find((t: any) => t._id === viewingResponses.templateId);
-                    const question = template?.questions.find((q: any) => q.id === response.questionId);
-
-                    return (
-                      <div key={index} className="border border-gray-200 rounded-lg p-4">
-                        <div className="mb-2">
-                          <span className="text-sm font-medium text-gray-700">
-                            Question {index + 1}:
-                          </span>
-                          <p className="text-sm text-gray-900 mt-1">
-                            {question?.text || "Question not found"}
-                          </p>
-                        </div>
-                        <div>
-                          <span className="text-sm font-medium text-gray-700">Answer:</span>
-                          <p className="text-sm text-gray-900 mt-1 bg-blue-50 p-3 rounded">
-                            {getAnswerDisplay(response.answer, question?.type || "text")}
-                          </p>
-                        </div>
-                      </div>
-                    );
-                  })
-                ) : (
-                  <p className="text-sm text-gray-500 text-center py-4">No responses available</p>
-                )}
-              </div>
-            </div>
-
-            <div className="sticky bottom-0 bg-gray-50 border-t border-gray-200 px-6 py-4">
-              <button
-                onClick={() => setViewingResponses(null)}
-                className="w-full px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Header */}
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-semibold">Guardian Checklists</h2>
@@ -495,6 +402,74 @@ export default function GuardianChecklistWorkspace() {
         </div>
       )}
 
+      {/* Responses Modal */}
+      {viewingResponses && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold">Guardian Responses</h3>
+              <button
+                onClick={() => setViewingResponses(null)}
+                className="text-gray-400 hover:text-gray-600 text-2xl leading-none"
+              >
+                ×
+              </button>
+            </div>
+            <div className="p-6 space-y-6">
+              <div className="bg-gray-50 rounded-lg p-4 space-y-2">
+                <div className="flex justify-between">
+                  <span className="text-sm font-medium text-gray-700">Resident:</span>
+                  <span className="text-sm text-gray-900">{viewingResponses.residentName}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm font-medium text-gray-700">Guardian:</span>
+                  <span className="text-sm text-gray-900">{viewingResponses.guardianEmail}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-sm font-medium text-gray-700">Completed:</span>
+                  <span className="text-sm text-gray-900">
+                    {viewingResponses.completedAt 
+                      ? new Date(viewingResponses.completedAt).toLocaleString()
+                      : "N/A"}
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <h4 className="font-medium text-gray-900">Responses</h4>
+                {viewingResponses.responses && viewingResponses.responses.length > 0 ? (
+                  viewingResponses.responses.map((response: any, index: number) => {
+                    const question = viewingResponses.questions?.find(
+                      (q: any) => q.id === response.questionId
+                    );
+                    return (
+                      <div key={index} className="border border-gray-200 rounded-lg p-4">
+                        <p className="font-medium text-gray-900 mb-2">
+                          {question?.text || `Question ${index + 1}`}
+                        </p>
+                        <p className="text-gray-700">
+                          {formatAnswer(response.answer, question?.type || "text")}
+                        </p>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <p className="text-gray-500 text-center py-4">No responses available</p>
+                )}
+              </div>
+            </div>
+            <div className="sticky bottom-0 bg-gray-50 px-6 py-4 border-t border-gray-200">
+              <button
+                onClick={() => setViewingResponses(null)}
+                className="w-full px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Links List */}
       {activeTab === "links" && !showSendChecklist && (
         <div className="bg-white rounded-lg shadow-sm border overflow-hidden">
@@ -561,14 +536,15 @@ export default function GuardianChecklistWorkspace() {
                         {new Date(link.sentDate).toLocaleDateString()}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm space-x-3">
-                        {link.completed ? (
+                        {link.completed && (
                           <button
                             onClick={() => setViewingResponses(link)}
                             className="text-blue-600 hover:text-blue-800 font-medium"
                           >
                             View Responses
                           </button>
-                        ) : !link.expired ? (
+                        )}
+                        {!link.completed && !link.expired && (
                           <>
                             <button
                               onClick={() => handleCopyLink(link.token)}
@@ -583,7 +559,7 @@ export default function GuardianChecklistWorkspace() {
                               Resend
                             </button>
                           </>
-                        ) : null}
+                        )}
                       </td>
                     </tr>
                   ))
