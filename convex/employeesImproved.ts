@@ -1,6 +1,5 @@
-import { mutation, query, internalMutation, internalAction } from "./_generated/server";
+import { mutation, query, internalMutation, internalAction, action } from "./_generated/server";
 import { v } from "convex/values";
-import { getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import bcrypt from "bcryptjs";
@@ -16,17 +15,17 @@ function generateToken(length = 32) {
 }
 
 // Helper: Get user role doc
-async function getUserRoleDoc(ctx: { db: any }, userId: Id<"users">) {
+async function getUserRoleDoc(ctx: { db: any }, clerkUserId: string) {
   return await ctx.db
     .query("roles")
-    .withIndex("by_userId", (q: any) => q.eq("userId", userId))
+    .withIndex("by_clerkUserId", (q: any) => q.eq("clerkUserId", clerkUserId))
     .unique();
 }
 
 // Helper: Audit
-async function audit(ctx: { db: any }, event: string, userId: Id<"users"> | null, details?: string) {
+async function audit(ctx: any, event: string, clerkUserId: string | null, details?: string) {
   await ctx.db.insert("audit_logs", {
-    userId: userId ?? undefined,
+    clerkUserId: clerkUserId ?? undefined,
     event,
     timestamp: Date.now(),
     deviceId: "system",
@@ -36,10 +35,10 @@ async function audit(ctx: { db: any }, event: string, userId: Id<"users"> | null
 }
 
 // Helper: Check admin access
-async function requireAdmin(ctx: { db: any }, userId: Id<"users">) {
-  const userRole = await getUserRoleDoc(ctx, userId);
+async function requireAdmin(ctx: { db: any }, clerkUserId: string) {
+  const userRole = await getUserRoleDoc(ctx, clerkUserId);
   if (!userRole || userRole.role !== "admin") {
-    await audit(ctx, "access_denied", userId, "admin_required");
+    await audit(ctx, "access_denied", clerkUserId, "admin_required");
     throw new Error("Admin access required");
   }
   return userRole;
@@ -55,9 +54,10 @@ export const createEmployeeWithInvite = mutation({
     locations: v.array(v.string()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
-    await requireAdmin(ctx, userId);
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
+    await requireAdmin(ctx, clerkUserId);
 
     const normalizedEmail = args.email.toLowerCase().trim();
 
@@ -71,16 +71,6 @@ export const createEmployeeWithInvite = mutation({
       throw new Error("Employee with this email already exists");
     }
 
-    // Check if user account already exists
-    const existingUser = await ctx.db
-      .query("users")
-      .withIndex("email", (q) => q.eq("email", normalizedEmail))
-      .first();
-    
-    if (existingUser) {
-      throw new Error("User account with this email already exists");
-    }
-
     // Generate invite token (valid for 7 days)
     const inviteToken = generateToken(32);
     const expiresAt = Date.now() + (7 * 24 * 60 * 60 * 1000);
@@ -90,19 +80,27 @@ export const createEmployeeWithInvite = mutation({
       name: args.name,
       email: normalizedEmail,
       workEmail: normalizedEmail,
-      role: args.role,
-      locations: args.locations,
       hasAcceptedInvite: false,
       inviteToken,
       inviteExpiresAt: expiresAt,
       employmentStatus: "pending",
       invitedAt: Date.now(),
-      invitedBy: userId,
+      invitedBy: clerkUserId,
       createdAt: Date.now(),
-      createdBy: userId,
+      createdBy: clerkUserId,
+      locations: args.locations,
     });
 
-    await audit(ctx, "create_employee_invite", userId, `employeeId=${employeeId},email=${normalizedEmail}`);
+    // Create a role record for the employee with a temporary clerkUserId (employeeId)
+    await ctx.db.insert("roles", {
+      clerkUserId: employeeId, // Temporary clerkUserId until invite is accepted
+      role: args.role,
+      locations: args.locations,
+      assignedBy: clerkUserId,
+      assignedAt: Date.now(),
+    });
+
+    await audit(ctx, "create_employee_invite", clerkUserId, `employeeId=${employeeId},email=${normalizedEmail}`);
     
     // Send invite email
     await ctx.scheduler.runAfter(0, internal.employeesImproved.sendInviteEmail, {
@@ -120,8 +118,7 @@ export const createEmployeeWithInvite = mutation({
   },
 });
 
-// --- ALTERNATIVE: CREATE EMPLOYEE WITH TEMPORARY PASSWORD ---
-// Use this only if email is not available - less secure
+// --- ALTERNATIVE: CREATE EMPLOYEE WITH TEMPORARY PASSWORD (Mutation calls Action) ---
 export const createEmployeeWithPassword = mutation({
   args: {
     name: v.string(),
@@ -130,10 +127,11 @@ export const createEmployeeWithPassword = mutation({
     role: v.union(v.literal("admin"), v.literal("supervisor"), v.literal("staff")),
     locations: v.array(v.string()),
   },
-  handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
-    await requireAdmin(ctx, userId);
+  handler: async (ctx, args): Promise<{ success: boolean; employeeId: Id<"employees">; clerkUserId: string; email: string; temporaryPassword: string; message: string }> => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
+    await requireAdmin(ctx, clerkUserId);
 
     const normalizedEmail = args.email.toLowerCase().trim();
 
@@ -152,65 +150,22 @@ export const createEmployeeWithPassword = mutation({
       throw new Error("Employee with this email already exists");
     }
 
-    // Check if user account already exists
-    const existingUser = await ctx.db
-      .query("users")
-      .withIndex("email", (q) => q.eq("email", normalizedEmail))
-      .first();
-    
-    if (existingUser) {
-      throw new Error("User account with this email already exists");
-    }
-
-    // Hash password with bcrypt (same as bootstrap admin)
-    const hashedPassword = bcrypt.hashSync(args.temporaryPassword, 10);
-
-    // Create user account
-    const newUserId = await ctx.db.insert("users", {
-      email: normalizedEmail,
-      name: args.name,
-      emailVerificationTime: Date.now(),
-    });
-    
-    // Create auth account with password
-    await ctx.db.insert("authAccounts", {
-      userId: newUserId,
-      provider: "password",
-      providerAccountId: normalizedEmail,
-      secret: hashedPassword,
-    });
-    
-    // Create role record
-    await ctx.db.insert("roles", {
-      userId: newUserId,
-      role: args.role,
-      locations: args.locations,
-      assignedBy: userId,
-      assignedAt: Date.now(),
-    });
-
-    // Create employee record
-    const employeeId = await ctx.db.insert("employees", {
+    // Call internal action to handle user creation and password hashing
+    const { employeeId, clerkUserId: createdClerkUserId } = await (ctx as any).runAction(internal.employeesImproved.insertEmployeeMutation, {
       name: args.name,
       email: normalizedEmail,
-      workEmail: normalizedEmail,
+      temporaryPassword: args.temporaryPassword,
       role: args.role,
       locations: args.locations,
-      hasAcceptedInvite: true,
-      employmentStatus: "active",
-      invitedAt: Date.now(),
-      onboardedAt: Date.now(),
-      onboardedBy: userId,
-      createdAt: Date.now(),
-      createdBy: userId,
+      adminClerkUserId: clerkUserId, // Pass the admin's clerkUserId for auditing
     });
 
-    await audit(ctx, "create_employee_with_password", userId, `employeeId=${employeeId},userId=${newUserId},email=${normalizedEmail}`);
+    await audit(ctx, "create_employee_with_password", clerkUserId, `employeeId=${employeeId},clerkUserId=${createdClerkUserId},email=${normalizedEmail}`);
     
     return { 
       success: true, 
-      employeeId,
-      userId: newUserId,
+      employeeId: employeeId,
+      clerkUserId: createdClerkUserId,
       email: normalizedEmail,
       temporaryPassword: args.temporaryPassword,
       message: "Employee created. Share these credentials securely.",
@@ -218,13 +173,68 @@ export const createEmployeeWithPassword = mutation({
   },
 });
 
-// --- ACCEPT INVITE AND SET PASSWORD ---
+// INTERNAL ACTION: Handles creation of employee with temporary password (uses bcrypt)
+export const createEmployeeWithPasswordInternal = action({
+  args: {
+    name: v.string(),
+    email: v.string(),
+    temporaryPassword: v.string(),
+    role: v.union(v.literal("admin"), v.literal("supervisor"), v.literal("staff")),
+    locations: v.array(v.string()),
+    adminClerkUserId: v.string(), // ClerkUserId of the admin performing the action
+  },
+  handler: async (ctx, args) => {
+    "use node"; // Required for bcrypt
+
+    // Hash password
+    const hashedPassword = bcrypt.hashSync(args.temporaryPassword, 10);
+
+    // Create auth account with password
+    await ctx.runMutation(internal.employeesImproved.insertAuthAccountMutation, {
+      clerkUserId: args.email,
+      provider: "password",
+      providerAccountId: args.email,
+      secret: hashedPassword,
+    });
+    
+    // Create role record
+    await ctx.runMutation(internal.employeesImproved.insertRoleMutation, {
+      clerkUserId: args.email,
+      role: args.role,
+      locations: args.locations,
+      assignedBy: args.adminClerkUserId,
+      assignedAt: Date.now(),
+    });
+
+    // Create employee record
+    const employeeId: any = await ctx.runMutation(internal.employeesImproved.insertEmployeeMutation, {
+      name: args.name,
+      email: args.email,
+      workEmail: args.email,
+      hasAcceptedInvite: true,
+      employmentStatus: "active",
+      invitedAt: Date.now(),
+      onboardedAt: Date.now(),
+      onboardedBy: args.adminClerkUserId,
+      createdAt: Date.now(),
+      createdBy: args.adminClerkUserId,
+      clerkUserId: args.email,
+    });
+
+    return { 
+      employeeId,
+      clerkUserId: args.email,
+    };
+  },
+});
+
+// --- ACCEPT INVITE AND SET PASSWORD (Mutation calls Action) ---
 export const acceptInviteAndSetPassword = mutation({
   args: {
     inviteToken: v.string(),
     password: v.string(),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<{ success: boolean; message: string }> => {
     // Find employee by invite token
     const employee = await ctx.db
       .query("employees")
@@ -253,45 +263,80 @@ export const acceptInviteAndSetPassword = mutation({
       throw new Error("Employee email not found");
     }
 
-    // Hash password
-    const hashedPassword = bcrypt.hashSync(args.password, 10);
+    // Fetch the role associated with the employee's temporary clerkUserId (employee._id)
+    const employeeRole = await ctx.db
+      .query("roles")
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", employee._id))
+      .first();
 
-    // Create user account
-    const newUserId = await ctx.db.insert("users", {
-      email: normalizedEmail,
-      name: employee.name,
-      emailVerificationTime: Date.now(),
-    });
-    
-    // Create auth account
-    await ctx.db.insert("authAccounts", {
-      userId: newUserId,
-      provider: "password",
-      providerAccountId: normalizedEmail,
-      secret: hashedPassword,
-    });
-    
-    // Create role record
-    await ctx.db.insert("roles", {
-      userId: newUserId,
-      role: employee.role || "staff",
-      locations: employee.locations || [],
-      assignedAt: Date.now(),
-    });
+    if (!employeeRole) {
+      throw new Error("Employee role not found");
+    }
 
-    // Update employee record
-    await ctx.db.patch(employee._id, {
-      hasAcceptedInvite: true,
-      employmentStatus: "active",
-      onboardedAt: Date.now(),
-    });
+    // Call internal action to handle password hashing and user/role creation
+    const {clerkUserId: acceptedClerkUserId} = await (ctx as any).runAction(
+			internal.employeesImproved.sendInviteEmail,
+			{
+				employeeId: employee._id,
+				email: normalizedEmail,
+				name: employee.name,
+				password: args.password,
+				role: employeeRole.role,
+				locations: employeeRole.locations,
+			}
+		);
 
-    await audit(ctx, "accept_employee_invite", newUserId, `employeeId=${employee._id},email=${normalizedEmail}`);
+    await audit(ctx, "accept_employee_invite", acceptedClerkUserId, `employeeId=${employee._id},email=${normalizedEmail}`);
     
     return { 
       success: true,
       message: "Account created successfully. You can now sign in.",
     };
+  },
+});
+
+// INTERNAL ACTION: Handles password hashing and user/role creation for invite acceptance
+export const acceptInviteAndSetPasswordInternal = action({
+  args: {
+    employeeId: v.id("employees"),
+    email: v.string(),
+    name: v.string(),
+    password: v.string(),
+    role: v.union(v.literal("admin"), v.literal("supervisor"), v.literal("staff")),
+    locations: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    "use node"; // Required for bcrypt
+
+    // Hash password
+    const hashedPassword = bcrypt.hashSync(args.password, 10);
+
+    // Create auth account
+    await ctx.runMutation(internal.employeesImproved.insertAuthAccountMutation, {
+      clerkUserId: args.email,
+      provider: "password",
+      providerAccountId: args.email,
+      secret: hashedPassword,
+    });
+    
+    // Create role record
+    await ctx.runMutation(internal.employeesImproved.insertRoleMutation, {
+      clerkUserId: args.email,
+      role: args.role,
+      locations: args.locations,
+      assignedAt: Date.now(),
+    });
+
+    // Update employee record
+    await ctx.runMutation(internal.employeesImproved.patchEmployeeMutation, {
+      employeeId: args.employeeId,
+      hasAcceptedInvite: true,
+      employmentStatus: "active",
+      onboardedAt: Date.now(),
+      clerkUserId: args.email,
+    });
+
+    return { clerkUserId: args.email };
   },
 });
 
@@ -316,11 +361,16 @@ export const verifyInviteToken = query({
       return { valid: false, message: "Invite has expired" };
     }
 
+    const employeeRole = await ctx.db
+      .query("roles")
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", employee._id)) // Use employee._id as temporary clerkUserId
+      .first();
+
     return {
       valid: true,
       employeeName: employee.name,
       employeeEmail: employee.email || employee.workEmail,
-      role: employee.role,
+      role: employeeRole?.role || null,
     };
   },
 });
@@ -334,6 +384,7 @@ export const sendInviteEmail = internalAction({
     inviteToken: v.string(),
   },
   handler: async (ctx, args) => {
+    "use node"; // Required for Resend
     const { Resend } = await import("resend");
     const resend = new Resend(process.env.CONVEX_RESEND_API_KEY || process.env.RESEND_API_KEY);
     
@@ -390,9 +441,10 @@ export const sendInviteEmail = internalAction({
 export const resendInvite = mutation({
   args: { employeeId: v.id("employees") },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
-    await requireAdmin(ctx, userId);
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
+    await requireAdmin(ctx, clerkUserId);
 
     const employee = await ctx.db.get(args.employeeId);
     if (!employee) {
@@ -421,8 +473,99 @@ export const resendInvite = mutation({
       inviteToken: newToken,
     });
 
-    await audit(ctx, "resend_employee_invite", userId, `employeeId=${args.employeeId}`);
+    await audit(ctx, "resend_employee_invite", clerkUserId, `employeeId=${args.employeeId}`);
 
     return { success: true, message: "Invite resent successfully" };
+  },
+});
+
+export const insertAuthAccountMutation = internalMutation({
+  args: {
+    clerkUserId: v.string(),
+    provider: v.string(),
+    providerAccountId: v.string(),
+    secret: v.string(),
+  },
+  returns: v.id("authAccounts"),
+  handler: async (ctx, args) => {
+    return await ctx.db.insert("authAccounts", {
+      clerkUserId: args.clerkUserId,
+      provider: args.provider,
+      providerAccountId: args.providerAccountId,
+      secret: args.secret,
+    });
+  },
+});
+
+export const insertRoleMutation = internalMutation({
+  args: {
+    clerkUserId: v.string(),
+    role: v.union(v.literal("admin"), v.literal("supervisor"), v.literal("staff")),
+    locations: v.array(v.string()),
+    assignedBy: v.optional(v.string()),
+    assignedAt: v.number(),
+  },
+  returns: v.id("roles"),
+  handler: async (ctx, args) => {
+    return await ctx.db.insert("roles", {
+      clerkUserId: args.clerkUserId,
+      role: args.role,
+      locations: args.locations,
+      assignedBy: args.assignedBy,
+      assignedAt: args.assignedAt,
+    });
+  },
+});
+
+export const insertEmployeeMutation = internalMutation({
+  args: {
+    name: v.string(),
+    email: v.string(),
+    workEmail: v.string(),
+    hasAcceptedInvite: v.boolean(),
+    employmentStatus: v.string(),
+    invitedAt: v.number(),
+    onboardedAt: v.optional(v.number()),
+    onboardedBy: v.optional(v.string()),
+    createdAt: v.number(),
+    createdBy: v.string(),
+    clerkUserId: v.string(),
+  },
+  returns: v.id("employees"),
+  handler: async (ctx, args) => {
+    return await ctx.db.insert("employees", {
+      name: args.name,
+      email: args.email,
+      workEmail: args.workEmail,
+      hasAcceptedInvite: args.hasAcceptedInvite,
+      employmentStatus: args.employmentStatus,
+      invitedAt: args.invitedAt,
+      onboardedAt: args.onboardedAt,
+      onboardedBy: args.onboardedBy,
+      createdAt: args.createdAt,
+      createdBy: args.createdBy,
+      clerkUserId: args.clerkUserId,
+      locations: [],
+    });
+  },
+});
+
+export const patchEmployeeMutation = internalMutation({
+  args: {
+    employeeId: v.id("employees"),
+    hasAcceptedInvite: v.boolean(),
+    employmentStatus: v.string(),
+    onboardedAt: v.number(),
+    clerkUserId: v.string(),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.employeeId, {
+      hasAcceptedInvite: args.hasAcceptedInvite,
+      employmentStatus: args.employmentStatus,
+      onboardedAt: args.onboardedAt,
+      clerkUserId: args.clerkUserId,
+    });
+    return null;
   },
 });

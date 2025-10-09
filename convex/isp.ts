@@ -1,14 +1,14 @@
 import { query, mutation, action } from "./_generated/server";
 import { v } from "convex/values";
-import { getAuthUserId } from "@convex-dev/auth/server";
+// import { getAuthUserId } from "@convex-dev/auth/server"; // Removed as per plan
 import { Id } from "./_generated/dataModel";
 import { api } from "./_generated/api";
 
 // Helper: Get user role and validate access
-async function getUserRoleAndValidateAccess(ctx: any, userId: Id<"users">) {
+async function getUserRoleAndValidateAccess(ctx: any, clerkUserId: string) {
   const userRole = await ctx.db
     .query("roles")
-    .withIndex("by_userId", (q: any) => q.eq("userId", userId))
+    .withIndex("by_clerkUserId", (q: any) => q.eq("clerkUserId", clerkUserId))
     .unique();
   
   if (!userRole) {
@@ -19,8 +19,8 @@ async function getUserRoleAndValidateAccess(ctx: any, userId: Id<"users">) {
 }
 
 // Helper: Check if user has access to resident's location
-async function validateResidentAccess(ctx: any, userId: Id<"users">, residentId: Id<"residents">) {
-  const userRole = await getUserRoleAndValidateAccess(ctx, userId);
+async function validateResidentAccess(ctx: any, clerkUserId: string, residentId: Id<"residents">) {
+  const userRole = await getUserRoleAndValidateAccess(ctx, clerkUserId);
   const resident = await ctx.db.get(residentId);
   
   if (!resident) {
@@ -45,7 +45,7 @@ async function auditISPAccess(
   ctx: any,
   ispFileId: Id<"isp_files">,
   residentId: Id<"residents">,
-  userId: Id<"users">,
+  clerkUserId: string,
   action: string,
   success: boolean,
   errorMessage?: string
@@ -53,7 +53,7 @@ async function auditISPAccess(
   await ctx.db.insert("isp_access_logs", {
     ispFileId,
     residentId,
-    userId,
+    clerkUserId,
     action: action as any,
     timestamp: Date.now(),
     location: "web", // Could be enhanced to get actual location
@@ -69,11 +69,12 @@ export const listISPFiles = query({
     residentId: v.id("residents"),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
     // Validate access to resident
-    const { userRole, resident } = await validateResidentAccess(ctx, userId, args.residentId);
+    const { userRole, resident } = await validateResidentAccess(ctx, clerkUserId, args.residentId);
     
     // Get ISP files for this resident
     const ispFiles = await ctx.db
@@ -105,11 +106,12 @@ export const generateISPUploadUrl = mutation({
     residentId: v.id("residents"),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
     // Validate access to resident
-    await validateResidentAccess(ctx, userId, args.residentId);
+    await validateResidentAccess(ctx, clerkUserId, args.residentId);
     
     // Generate upload URL
     return await ctx.storage.generateUploadUrl();
@@ -130,11 +132,12 @@ export const createISPFile = mutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
     // Validate access to resident
-    const { userRole, resident } = await validateResidentAccess(ctx, userId, args.residentId);
+    const { userRole, resident } = await validateResidentAccess(ctx, clerkUserId, args.residentId);
     
     // Validate file type (only PDF and DOCX allowed)
     const allowedTypes = [
@@ -190,7 +193,7 @@ export const createISPFile = mutation({
       contentType: args.contentType,
       preparedBy: args.preparedBy,
       notes: args.notes,
-      uploadedBy: userId,
+      uploadedBy: clerkUserId,
       uploadedAt: Date.now(),
     });
     
@@ -199,14 +202,14 @@ export const createISPFile = mutation({
       ctx,
       ispFileId,
       args.residentId,
-      userId,
+      clerkUserId,
       "upload",
       true
     );
     
     // Also add to general audit log (no PHI)
     await ctx.db.insert("audit_logs", {
-      userId,
+      clerkUserId,
       event: "isp_upload",
       timestamp: Date.now(),
       deviceId: "web-browser",
@@ -224,12 +227,14 @@ export const generateISPDownloadUrl = action({
     ispFileId: v.id("isp_files"),
   },
   handler: async (ctx, args): Promise<{ downloadUrl: string; fileName: string; expiresIn: number }> => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
     // Get ISP file record
     const ispFile: { fileStorageId: string; fileName: string; residentId: Id<"residents"> } | null = await ctx.runQuery(api.isp.getISPFileForDownload, {
       ispFileId: args.ispFileId,
+      clerkUserId: clerkUserId, // Pass clerkUserId for access validation in internal query
     });
     
     if (!ispFile) {
@@ -244,6 +249,7 @@ export const generateISPDownloadUrl = action({
       await ctx.runMutation(api.isp.auditISPDownload, {
         ispFileId: args.ispFileId,
         residentId: ispFile.residentId,
+        clerkUserId: clerkUserId, // Pass clerkUserId for auditing
         success: false,
         errorMessage: "File not found in storage",
       });
@@ -254,6 +260,7 @@ export const generateISPDownloadUrl = action({
     await ctx.runMutation(api.isp.auditISPDownload, {
       ispFileId: args.ispFileId,
       residentId: ispFile.residentId,
+      clerkUserId: clerkUserId, // Pass clerkUserId for auditing
       success: true,
     });
     
@@ -269,11 +276,9 @@ export const generateISPDownloadUrl = action({
 export const getISPFileForDownload = query({
   args: {
     ispFileId: v.id("isp_files"),
+    clerkUserId: v.string(), // Added clerkUserId for access validation
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
-    
     // Get ISP file
     const ispFile = await ctx.db.get(args.ispFileId);
     if (!ispFile) {
@@ -281,7 +286,7 @@ export const getISPFileForDownload = query({
     }
     
     // Validate access to resident
-    await validateResidentAccess(ctx, userId, ispFile.residentId);
+    await validateResidentAccess(ctx, args.clerkUserId, ispFile.residentId);
     
     return {
       fileStorageId: ispFile.fileStorageId,
@@ -296,18 +301,16 @@ export const auditISPDownload = mutation({
   args: {
     ispFileId: v.id("isp_files"),
     residentId: v.id("residents"),
+    clerkUserId: v.string(), // Added clerkUserId for auditing
     success: v.boolean(),
     errorMessage: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
-    
     await auditISPAccess(
       ctx,
       args.ispFileId,
       args.residentId,
-      userId,
+      args.clerkUserId,
       "download",
       args.success,
       args.errorMessage
@@ -321,8 +324,9 @@ export const activateISPFile = mutation({
     ispFileId: v.id("isp_files"),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
     // Get ISP file
     const ispFile = await ctx.db.get(args.ispFileId);
@@ -331,7 +335,7 @@ export const activateISPFile = mutation({
     }
     
     // Validate access
-    const { userRole, resident } = await validateResidentAccess(ctx, userId, ispFile.residentId);
+    const { userRole, resident } = await validateResidentAccess(ctx, clerkUserId, ispFile.residentId);
     
     // Only supervisors and admins can activate ISP files
     if (!["admin", "supervisor"].includes(userRole.role)) {
@@ -348,7 +352,7 @@ export const activateISPFile = mutation({
     for (const activeFile of activeFiles) {
       await ctx.db.patch(activeFile._id, {
         status: "archived",
-        archivedBy: userId,
+        archivedBy: clerkUserId,
         archivedAt: Date.now(),
       });
     }
@@ -356,7 +360,7 @@ export const activateISPFile = mutation({
     // Activate the selected file
     await ctx.db.patch(args.ispFileId, {
       status: "active",
-      activatedBy: userId,
+      activatedBy: clerkUserId,
       activatedAt: Date.now(),
     });
     
@@ -365,14 +369,14 @@ export const activateISPFile = mutation({
       ctx,
       args.ispFileId,
       ispFile.residentId,
-      userId,
+      clerkUserId,
       "activate",
       true
     );
     
-    // General audit log
+    // Also add to general audit log (no PHI)
     await ctx.db.insert("audit_logs", {
-      userId,
+      clerkUserId,
       event: "isp_activate",
       timestamp: Date.now(),
       deviceId: "web-browser",
@@ -390,8 +394,9 @@ export const deleteISPFile = mutation({
     ispFileId: v.id("isp_files"),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
     // Get ISP file
     const ispFile = await ctx.db.get(args.ispFileId);
@@ -400,7 +405,7 @@ export const deleteISPFile = mutation({
     }
     
     // Validate access
-    const { userRole, resident } = await validateResidentAccess(ctx, userId, ispFile.residentId);
+    const { userRole, resident } = await validateResidentAccess(ctx, clerkUserId, ispFile.residentId);
     
     // Only admins can delete ISP files
     if (userRole.role !== "admin") {
@@ -410,7 +415,7 @@ export const deleteISPFile = mutation({
     // Archive the file instead of hard delete
     await ctx.db.patch(args.ispFileId, {
       status: "archived",
-      archivedBy: userId,
+      archivedBy: clerkUserId,
       archivedAt: Date.now(),
     });
     
@@ -419,14 +424,14 @@ export const deleteISPFile = mutation({
       ctx,
       args.ispFileId,
       ispFile.residentId,
-      userId,
+      clerkUserId,
       "delete",
       true
     );
     
-    // General audit log
+    // Also add to general audit log (no PHI)
     await ctx.db.insert("audit_logs", {
-      userId,
+      clerkUserId,
       event: "isp_delete",
       timestamp: Date.now(),
       deviceId: "web-browser",
@@ -442,17 +447,18 @@ export const deleteISPFile = mutation({
 export const getISPAccessLogs = query({
   args: {
     residentId: v.optional(v.id("residents")),
-    userId: v.optional(v.id("users")),
+    clerkUserId: v.optional(v.string()), // Changed from userId: v.optional(v.id("users"))
     dateFrom: v.optional(v.number()),
     dateTo: v.optional(v.number()),
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
     // Only admins can view audit logs
-    const userRole = await getUserRoleAndValidateAccess(ctx, userId);
+    const userRole = await getUserRoleAndValidateAccess(ctx, clerkUserId);
     if (userRole.role !== "admin") {
       throw new Error("Access denied: Admin role required");
     }
@@ -465,10 +471,10 @@ export const getISPAccessLogs = query({
         .query("isp_access_logs")
         .withIndex("by_residentId", (q) => q.eq("residentId", args.residentId!))
         .collect();
-    } else if (args.userId) {
+    } else if (args.clerkUserId) { // Changed from userId
       logs = await ctx.db
         .query("isp_access_logs")
-        .withIndex("by_userId", (q) => q.eq("userId", args.userId!))
+        .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", args.clerkUserId!)) // Changed index and field
         .collect();
     } else {
       logs = await ctx.db
@@ -496,15 +502,15 @@ export const getISPAccessLogs = query({
       logs = logs.slice(0, args.limit);
     }
     
-    // Get user names for the logs (no PHI)
-    const users = await ctx.db.query("users").collect();
-    const userMap = new Map(users.map(u => [u._id, u.name || u.email || "Unknown User"]));
+    // Get employee names for the logs
+    const employees = await ctx.db.query("employees").collect();
+    const employeeMap = new Map(employees.map(e => [e.clerkUserId, e.name || e.workEmail || "Unknown Employee"]));
     
     return logs.map(log => ({
       id: log._id,
       action: log.action,
       timestamp: log.timestamp,
-      userName: userMap.get(log.userId) || "Unknown User",
+      userName: employeeMap.get(log.clerkUserId) || "Unknown Employee", // Changed from userMap.get(log.userId)
       location: log.location,
       success: log.success,
       errorMessage: log.errorMessage,

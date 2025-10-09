@@ -1,20 +1,19 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
-import { getAuthUserId } from "@convex-dev/auth/server";
-import { Id } from "./_generated/dataModel";
+// import { Id } from "./_generated/dataModel"; // Removed as Id<"users"> is no longer used
 
 // Helper: Get user role doc
-async function getUserRoleDoc(ctx: any, userId: Id<"users">) {
+async function getUserRoleDoc(ctx: any, clerkUserId: string) {
   return await ctx.db
     .query("roles")
-    .withIndex("by_userId", (q: any) => q.eq("userId", userId))
+    .withIndex("by_clerkUserId", (q: any) => q.eq("clerkUserId", clerkUserId))
     .unique();
 }
 
 // Helper: Audit
-async function audit(ctx: any, event: string, userId: Id<"users"> | null, details?: string) {
+async function audit(ctx: any, event: string, clerkUserId: string | null, details?: string) {
   await ctx.db.insert("audit_logs", {
-    userId: userId ?? undefined,
+    clerkUserId: clerkUserId ?? undefined,
     event,
     timestamp: Date.now(),
     deviceId: "system",
@@ -24,10 +23,10 @@ async function audit(ctx: any, event: string, userId: Id<"users"> | null, detail
 }
 
 // Helper: Check if user has care access
-async function requireCareAccess(ctx: any, userId: Id<"users">) {
-  const userRole = await getUserRoleDoc(ctx, userId);
+async function requireCareAccess(ctx: any, clerkUserId: string) {
+  const userRole = await getUserRoleDoc(ctx, clerkUserId);
   if (!userRole || !userRole.role || !["admin", "supervisor", "staff"].includes(userRole.role)) {
-    await audit(ctx, "access_denied", userId, "care_access_required");
+    await audit(ctx, "access_denied", clerkUserId, "care_access_required");
     throw new Error("Care access required");
   }
   return userRole;
@@ -37,10 +36,11 @@ async function requireCareAccess(ctx: any, userId: Id<"users">) {
 export const getMyResidents = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    const userRole = await requireCareAccess(ctx, userId);
+    const userRole = await requireCareAccess(ctx, clerkUserId);
     
     // Admin can see all residents
     if (userRole.role === "admin") {
@@ -82,10 +82,11 @@ export const getResidentLogs = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    const userRole = await requireCareAccess(ctx, userId);
+    const userRole = await requireCareAccess(ctx, clerkUserId);
     const userLocations = userRole.role === "admin" ? [] : (userRole.locations || []);
     
     let logs;
@@ -128,12 +129,12 @@ export const getResidentLogs = query({
     }
     
     // Get additional data for each log
-    const users = await ctx.db.query("users").collect();
+    const employees = await ctx.db.query("employees").collect();
     const residents = await ctx.db.query("residents").collect();
     
     const enrichedLogs = await Promise.all(
       logs.map(async (log) => {
-        const author = users.find(u => u._id === log.authorId);
+        const author = employees.find(e => e.clerkUserId === log.authorId);
         const resident = residents.find(r => r._id === log.residentId);
         
         return {
@@ -142,7 +143,7 @@ export const getResidentLogs = query({
           residentName: resident?.name || "Unknown Resident",
           residentLocation: resident?.location || "Unknown Location",
           authorId: log.authorId,
-          authorName: author?.name || author?.email || "Unknown User",
+          authorName: author?.name || author?.workEmail || "Unknown User",
           version: log.version,
           template: log.template,
           content: log.content,
@@ -159,10 +160,11 @@ export const getResidentLogs = query({
 export const getRecentLogsSummary = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    const userRole = await requireCareAccess(ctx, userId);
+    const userRole = await requireCareAccess(ctx, clerkUserId);
     const userLocations = userRole.role === "admin" ? [] : (userRole.locations || []);
     
     // Get logs from last 7 days
@@ -192,7 +194,7 @@ export const getRecentLogsSummary = query({
       totalLogs: filteredLogs.length,
       logsByLocation: {} as Record<string, number>,
       logsByTemplate: {} as Record<string, number>,
-      myLogs: filteredLogs.filter(log => log.authorId === userId).length,
+      myLogs: filteredLogs.filter(log => log.authorId === clerkUserId).length,
     };
     
     const residents = await ctx.db.query("residents").collect();
@@ -219,10 +221,11 @@ export const createResidentLog = mutation({
     content: v.string(),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    const userRole = await requireCareAccess(ctx, userId);
+    const userRole = await requireCareAccess(ctx, clerkUserId);
     
     // Check if resident exists and user has access
     const resident = await ctx.db.get(args.residentId);
@@ -243,7 +246,7 @@ export const createResidentLog = mutation({
     
     const logId = await ctx.db.insert("resident_logs", {
       residentId: args.residentId,
-      authorId: userId,
+      authorId: clerkUserId,
       version: nextVersion,
       template: args.template,
       content: args.content,
@@ -251,7 +254,7 @@ export const createResidentLog = mutation({
       createdAt: Date.now(),
     });
     
-    await audit(ctx, "create_resident_log", userId, 
+    await audit(ctx, "create_resident_log", clerkUserId, 
       `residentId=${args.residentId},template=${args.template},version=${nextVersion}`);
     
     return logId;
@@ -262,10 +265,11 @@ export const createResidentLog = mutation({
 export const getLogTemplates = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    await requireCareAccess(ctx, userId);
+    await requireCareAccess(ctx, clerkUserId);
     
     // Return predefined templates - could be made configurable later
     return [
@@ -330,10 +334,11 @@ export const searchLogs = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    const userRole = await requireCareAccess(ctx, userId);
+    const userRole = await requireCareAccess(ctx, clerkUserId);
     const userLocations = userRole.role === "admin" ? [] : (userRole.locations || []);
     
     let logs = await ctx.db
@@ -378,11 +383,11 @@ export const searchLogs = query({
     }
     
     // Enrich with additional data
-    const users = await ctx.db.query("users").collect();
+    const employees = await ctx.db.query("employees").collect();
     const residents = await ctx.db.query("residents").collect();
     
     const enrichedLogs = logs.map(log => {
-      const author = users.find(u => u._id === log.authorId);
+      const author = employees.find(e => e.clerkUserId === log.authorId);
       const resident = residents.find(r => r._id === log.residentId);
       
       return {
@@ -391,7 +396,7 @@ export const searchLogs = query({
         residentName: resident?.name || "Unknown Resident",
         residentLocation: resident?.location || "Unknown Location",
         authorId: log.authorId,
-        authorName: author?.name || author?.email || "Unknown User",
+        authorName: author?.name || author?.workEmail || "Unknown User",
         version: log.version,
         template: log.template,
         content: log.content,
@@ -424,14 +429,15 @@ export const generateSelfieUploadUrl = mutation({
 export const getCurrentShift = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    await requireCareAccess(ctx, userId);
+    await requireCareAccess(ctx, clerkUserId);
     
     const currentShift = await ctx.db
       .query("shifts")
-      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId))
       .filter((q) => q.eq(q.field("clockOutTime"), undefined))
       .order("desc")
       .first();
@@ -452,10 +458,11 @@ export const clockIn = mutation({
     selfieStorageId: v.optional(v.id("_storage")),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    const userRole = await requireCareAccess(ctx, userId);
+    const userRole = await requireCareAccess(ctx, clerkUserId);
     
     // Check if selfie is enforced
     const config = await ctx.db.query("config").first();
@@ -465,7 +472,7 @@ export const clockIn = mutation({
     
     const existingShift = await ctx.db
       .query("shifts")
-      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId))
       .filter((q) => q.eq(q.field("clockOutTime"), undefined))
       .first();
     
@@ -474,14 +481,14 @@ export const clockIn = mutation({
     }
     
     const shiftId = await ctx.db.insert("shifts", {
-      userId,
+      clerkUserId,
       location: args.location,
       clockInTime: Date.now(),
       deviceId: "web-browser",
       clockInSelfie: args.selfieStorageId,
     });
     
-    await audit(ctx, "clock_in", userId, `location=${args.location},selfie=${args.selfieStorageId ? "yes" : "no"}`);
+    await audit(ctx, "clock_in", clerkUserId, `location=${args.location},selfie=${args.selfieStorageId ? "yes" : "no"}`);
     return shiftId;
   },
 });
@@ -492,16 +499,17 @@ export const clockOut = mutation({
     selfieStorageId: v.optional(v.id("_storage")),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    await requireCareAccess(ctx, userId);
+    await requireCareAccess(ctx, clerkUserId);
     
     // Note: Selfie is NOT required for clock out, only for clock in
     
     const currentShift = await ctx.db
       .query("shifts")
-      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId))
       .filter((q) => q.eq(q.field("clockOutTime"), undefined))
       .order("desc")
       .first();
@@ -516,7 +524,7 @@ export const clockOut = mutation({
     });
     
     const duration = Date.now() - currentShift.clockInTime;
-    await audit(ctx, "clock_out", userId, `location=${currentShift.location},selfie=${args.selfieStorageId ? "yes" : "no"}`);
+    await audit(ctx, "clock_out", clerkUserId, `location=${currentShift.location},selfie=${args.selfieStorageId ? "yes" : "no"}`);
     
     return { shiftId: currentShift._id, duration, location: currentShift.location };
   },
@@ -525,14 +533,15 @@ export const clockOut = mutation({
 export const getResidentIspStatus = query({
   args: { residentId: v.id("residents") },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return null;
-    const userRole = await requireCareAccess(ctx, userId);
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return null;
+    const clerkUserId = identity.subject;
+    const userRole = await requireCareAccess(ctx, clerkUserId);
     const resident = await ctx.db.get(args.residentId);
     if (!resident) return null;
     const isp = await ctx.db.query("isp").withIndex("by_residentId", (q) => q.eq("residentId", args.residentId)).filter((q) => q.eq(q.field("published"), true)).order("desc").first();
     if (!isp) return null;
-    const ack = await ctx.db.query("isp_acknowledgments").withIndex("by_resident_and_user", (q) => q.eq("residentId", args.residentId).eq("userId", userId)).filter((q) => q.eq(q.field("ispId"), isp._id)).first();
+    const ack = await ctx.db.query("isp_acknowledgments").withIndex("by_resident_and_user", (q) => q.eq("residentId", args.residentId).eq("clerkUserId", clerkUserId)).filter((q) => q.eq(q.field("ispId"), isp._id)).first();
     return { id: isp._id, version: isp.version || 1, dueAt: isp.dueAt, acknowledged: !!ack };
   },
 });
@@ -541,16 +550,17 @@ export const getResidentIspStatus = query({
 export const getPendingAcknowledgments = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    await requireCareAccess(ctx, userId);
+    await requireCareAccess(ctx, clerkUserId);
     
     const isps = await ctx.db.query("isp").filter(q => q.eq(q.field("published"), true)).collect();
     const existingAcks = await ctx.db
       .query("isp_acknowledgments")
       .collect()
-      .then(acks => acks.filter(ack => ack.userId === userId));
+      .then(acks => acks.filter(ack => ack.clerkUserId === clerkUserId));
     
     const pending = isps.filter(isp => {
       return !existingAcks.some(ack => ack.residentId === isp.residentId && ack.ispId === isp._id);
@@ -574,10 +584,11 @@ export const getPendingAcknowledgments = query({
 export const acknowledgeIsp = mutation({
   args: { residentId: v.id("residents"), ispId: v.id("isp") },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    await requireCareAccess(ctx, userId);
+    await requireCareAccess(ctx, clerkUserId);
     
     const isp = await ctx.db.get(args.ispId);
     if (!isp || !isp.published) {
@@ -586,13 +597,13 @@ export const acknowledgeIsp = mutation({
     
     await ctx.db.insert("isp_acknowledgments", {
       residentId: args.residentId,
-      userId,
+      clerkUserId,
       ispId: args.ispId,
       acknowledgedAt: Date.now(),
       acknowledgedIsp: args.ispId,
     });
     
-    await audit(ctx, "acknowledge_isp", userId, `residentId=${args.residentId}`);
+    await audit(ctx, "acknowledge_isp", clerkUserId, `residentId=${args.residentId}`);
     return true;
   },
 });

@@ -1,7 +1,20 @@
+
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
-import { getAuthUserId } from "@convex-dev/auth/server";
-import { Id } from "./_generated/dataModel";
+// import { getAuthUserId } from "@convex-dev/auth/server"; // Removed as per plan
+// import { Id } from "./_generated/dataModel"; // Removed as Id<"users"> is no longer used
+
+// Helper: Audit
+async function audit(ctx: any, event: string, clerkUserId: string | null, details?: string) {
+  await ctx.db.insert("audit_logs", {
+    clerkUserId: clerkUserId ?? undefined,
+    event,
+    timestamp: Date.now(),
+    deviceId: "system",
+    location: "",
+    details,
+  });
+}
 
 // Resident Logs
 
@@ -13,15 +26,15 @@ export const listResidentLogs = query({
       .withIndex("by_residentId", (q) => q.eq("residentId", residentId))
       .order("desc")
       .collect();
-    const userIds = Array.from(new Set(logs.map(l => l.authorId).filter((id): id is Id<"users"> => id !== undefined)));
-    const users = await Promise.all(userIds.map(id => ctx.db.get(id)));
-    const idToName: Record<Id<"users">, string> = {};
-    users.forEach(u => {
-      if (u) idToName[u._id] = u.name || u.email || "Unknown";
+    const employeeClerkUserIds = Array.from(new Set(logs.map(l => l.authorId).filter((id): id is string => id !== undefined)));
+    const employees = await Promise.all(employeeClerkUserIds.map(clerkUserId => ctx.db.query("employees").withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId)).unique()));
+    const clerkUserIdToName: Record<string, string> = {};
+    employees.forEach(e => {
+      if (e) clerkUserIdToName[e.clerkUserId as string] = e.name || e.workEmail || "Unknown";
     });
     return logs.map(log => ({
       ...log,
-      authorName: log.authorId ? (idToName[log.authorId] || "Unknown") : "Unknown",
+      authorName: log.authorId ? (clerkUserIdToName[log.authorId] || "Unknown") : "Unknown",
     }));
   },
 });
@@ -29,8 +42,9 @@ export const listResidentLogs = query({
 export const canLogForResident = query({
   args: { residentId: v.id("residents") },
   handler: async (ctx, { residentId }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return false;
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return false;
+    const clerkUserId = identity.subject;
     const currentIsp = await ctx.db
       .query("isp")
       .withIndex("by_residentId", (q) => q.eq("residentId", residentId))
@@ -40,7 +54,7 @@ export const canLogForResident = query({
     const ack = await ctx.db
       .query("isp_acknowledgments")
       .withIndex("by_resident_and_user", (q) =>
-        q.eq("residentId", residentId).eq("userId", userId)
+        q.eq("residentId", residentId).eq("clerkUserId", clerkUserId)
       )
       .first();
     return !!(ack && ack.ispId === currentIsp._id);
@@ -50,8 +64,9 @@ export const canLogForResident = query({
 export const acknowledgeIsp = mutation({
   args: { residentId: v.id("residents") },
   handler: async (ctx, { residentId }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     const currentIsp = await ctx.db
       .query("isp")
       .withIndex("by_residentId", (q) => q.eq("residentId", residentId))
@@ -59,15 +74,15 @@ export const acknowledgeIsp = mutation({
       .first();
     if (!currentIsp || !currentIsp.published) throw new Error("No published ISP");
     const ack = await ctx.db
-      .query("isp_acknowledgments")
-      .withIndex("by_resident_and_user", (q) =>
-        q.eq("residentId", residentId).eq("userId", userId)
-      )
-      .first();
+			.query('isp_acknowledgments')
+			.withIndex('by_resident_and_user', (q) =>
+				q.eq('residentId', residentId).eq('clerkUserId', clerkUserId)
+			)
+			.first();
     if (ack && ack.ispId === currentIsp._id) return true;
     await ctx.db.insert("isp_acknowledgments", {
       residentId,
-      userId,
+      clerkUserId,
       ispId: currentIsp._id,
       acknowledgedAt: Date.now(),
       acknowledgedIsp: currentIsp._id,
@@ -83,8 +98,11 @@ export const createResidentLog = mutation({
     fields: v.object({ mood: v.string(), notes: v.string() }),
   },
   handler: async (ctx, { residentId, template, fields }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error('Not authenticated');
+		const clerkUserId = identity.subject;
+
+		if (!clerkUserId) throw new Error('Not authenticated');
     // Check if user can log for this resident
     const currentIsp = await ctx.db
       .query("isp")
@@ -95,7 +113,7 @@ export const createResidentLog = mutation({
       const ack = await ctx.db
         .query("isp_acknowledgments")
         .withIndex("by_resident_and_user", (q) =>
-          q.eq("residentId", residentId).eq("userId", userId)
+          q.eq("residentId", residentId).eq("clerkUserId", clerkUserId)
         )
         .first();
       if (!ack || ack.ispId !== currentIsp._id) {
@@ -115,7 +133,7 @@ export const createResidentLog = mutation({
     
     await ctx.db.insert("resident_logs", {
       residentId,
-      authorId: userId,
+      authorId: clerkUserId,
       version,
       template,
       content: JSON.stringify(fields),
@@ -132,11 +150,14 @@ export const editResidentLog = mutation({
     fields: v.object({ mood: v.string(), notes: v.string() }),
   },
   handler: async (ctx, { logId, fields }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error('Not authenticated');
+		const clerkUserId = identity.subject;
+
+		if (!clerkUserId) throw new Error('Not authenticated');
     const log = await ctx.db.get(logId);
     if (!log) throw new Error("Log not found");
-    if (log.authorId !== userId) throw new Error("Not your log");
+    if (log.authorId !== clerkUserId) throw new Error("Not your log");
     const latest = await ctx.db
       .query("resident_logs")
       .withIndex("by_residentId", (q) => q.eq("residentId", log.residentId))
@@ -149,7 +170,7 @@ export const editResidentLog = mutation({
     
     await ctx.db.insert("resident_logs", {
       residentId: log.residentId,
-      authorId: userId,
+      authorId: clerkUserId,
       version,
       template: log.template,
       content: JSON.stringify(fields),
@@ -189,8 +210,11 @@ export const listResidentIsps = query({
 export const authorIsp = mutation({
   args: { residentId: v.id("residents"), content: v.string() },
   handler: async (ctx, { residentId, content }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error('Not authenticated');
+		const clerkUserId = identity.subject;
+
+		if (!clerkUserId) throw new Error('Not authenticated');
     const latest = await ctx.db
       .query("isp")
       .withIndex("by_residentId", (q) => q.eq("residentId", residentId))
@@ -213,8 +237,11 @@ export const authorIsp = mutation({
 export const publishIsp = mutation({
   args: { residentId: v.id("residents") },
   handler: async (ctx, { residentId }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error('Not authenticated');
+		const clerkUserId = identity.subject;
+
+		if (!clerkUserId) throw new Error('Not authenticated');
     const latest = await ctx.db
       .query("isp")
       .withIndex("by_residentId", (q) => q.eq("residentId", residentId))
@@ -268,8 +295,12 @@ export const getResidentAuditTrail = query({
 export const listKiosks = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    // const userId = await getAuthUserId(ctx);
+    const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error('Not authenticated');
+		const clerkUserId = identity.subject;
+
+    if (!clerkUserId) throw new Error("Not authenticated");
     const kiosks = await ctx.db.query("kiosks").collect();
     return kiosks.map(kiosk => ({
       id: kiosk._id,
@@ -286,8 +317,11 @@ export const listKiosks = query({
 export const listPairingTokens = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error('Not authenticated');
+		const clerkUserId = identity.subject;
+
+		if (!clerkUserId) throw new Error('Not authenticated');
     const tokens = await ctx.db
       .query("kiosk_pairing_tokens")
       .withIndex("by_status", (q) => q.eq("status", "active"))
@@ -311,8 +345,11 @@ export const createKioskPairing = mutation({
     deviceLabel: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error('Not authenticated');
+		const clerkUserId = identity.subject;
+
+		if (!clerkUserId) throw new Error('Not authenticated');
     const token = Array.from({ length: 8 }, () => {
       const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
       return chars.charAt(Math.floor(Math.random() * chars.length));
@@ -325,7 +362,7 @@ export const createKioskPairing = mutation({
       location: args.location,
       deviceLabel: args.deviceLabel,
       expiresAt,
-      issuedBy: userId,
+      issuedBy: clerkUserId,
       issuedAt: now,
       usedAt: undefined,
 
@@ -347,10 +384,44 @@ export const updateKioskLabel = mutation({
     deviceLabel: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error('Not authenticated');
+		const clerkUserId = identity.subject;
+
+		if (!clerkUserId) throw new Error('Not authenticated');
     await ctx.db.patch(args.kioskId, { deviceLabel: args.deviceLabel });
     return { success: true };
+  },
+});
+
+// Query: List available kiosk devices for employee assignment
+export const listAvailableKioskDevices = query({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
+
+    // Only admins can view available devices for assignment
+    const userRole = await ctx.db
+      .query("roles")
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId))
+      .unique();
+
+    if (!userRole || userRole.role !== "admin") {
+      throw new Error("Admin access required to list devices");
+    }
+
+    const kiosks = await ctx.db
+      .query("kiosks")
+      .filter((q) => q.eq(q.field("status"), "active"))
+      .collect();
+
+    return kiosks.map((kiosk) => ({
+      deviceId: kiosk.deviceId,
+      deviceLabel: kiosk.deviceLabel || kiosk.name || kiosk.deviceId,
+      location: kiosk.location,
+    }));
   },
 });
 
@@ -364,8 +435,11 @@ export const updateKioskStatus = mutation({
     ),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error('Not authenticated');
+		const clerkUserId = identity.subject;
+
+		if (!clerkUserId) throw new Error('Not authenticated');
     await ctx.db.patch(args.kioskId, { status: args.status });
     return { success: true };
   },
@@ -453,13 +527,16 @@ export const deleteKiosk = mutation({
     kioskId: v.id("kiosks"),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+   const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error('Not authenticated');
+		const clerkUserId = identity.subject;
+
+		if (!clerkUserId) throw new Error('Not authenticated');
     const kiosk = await ctx.db.get(args.kioskId);
     if (!kiosk) throw new Error("Kiosk not found");
     await ctx.db.delete(args.kioskId);
     await ctx.db.insert("audit_logs", {
-      userId,
+      clerkUserId: clerkUserId ?? undefined,
       event: "kiosk_deleted",
       timestamp: Date.now(),
       deviceId: kiosk.deviceId,

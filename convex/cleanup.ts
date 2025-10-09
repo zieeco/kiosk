@@ -1,18 +1,19 @@
 import { mutation } from "./_generated/server";
-import { getAuthUserId } from "@convex-dev/auth/server";
-import { Id } from "./_generated/dataModel";
+import { v } from "convex/values"; // Added for v.string()
+// import { getAuthUserId } from "@convex-dev/auth/server"; // Removed as per plan
+// import { Id } from "./_generated/dataModel"; // Removed as Id<"users"> is no longer used
 
 // Helper: Get user role doc
-async function getUserRoleDoc(ctx: any, userId: Id<"users">) {
+async function getUserRoleDoc(ctx: any, clerkUserId: string) {
   return await ctx.db
     .query("roles")
-    .withIndex("by_userId", (q: any) => q.eq("userId", userId))
+    .withIndex("by_clerkUserId", (q: any) => q.eq("clerkUserId", clerkUserId))
     .unique();
 }
 
 // Helper: Check if user has admin access
-async function requireAdminAccess(ctx: any, userId: Id<"users">) {
-  const userRole = await getUserRoleDoc(ctx, userId);
+async function requireAdminAccess(ctx: any, clerkUserId: string) {
+  const userRole = await getUserRoleDoc(ctx, clerkUserId);
   if (!userRole || userRole.role !== "admin") {
     throw new Error("Admin access required");
   }
@@ -20,11 +21,11 @@ async function requireAdminAccess(ctx: any, userId: Id<"users">) {
 }
 
 // Helper: Delete user and all related records
-async function deleteUserAndRelatedRecords(ctx: any, targetUserId: Id<"users">) {
+async function deleteUserAndRelatedRecords(ctx: any, targetClerkUserId: string) {
   // 1. Delete shifts
   const shifts = await ctx.db
     .query("shifts")
-    .withIndex("by_userId", (q: any) => q.eq("userId", targetUserId))
+    .withIndex("by_clerkUserId", (q: any) => q.eq("clerkUserId", targetClerkUserId))
     .collect();
   for (const shift of shifts) {
     await ctx.db.delete(shift._id);
@@ -33,7 +34,7 @@ async function deleteUserAndRelatedRecords(ctx: any, targetUserId: Id<"users">) 
   // 2. Delete resident logs
   const residentLogs = await ctx.db
     .query("resident_logs")
-    .withIndex("by_authorId", (q: any) => q.eq("authorId", targetUserId))
+    .withIndex("by_authorId", (q: any) => q.eq("authorId", targetClerkUserId))
     .collect();
   for (const log of residentLogs) {
     await ctx.db.delete(log._id);
@@ -42,7 +43,7 @@ async function deleteUserAndRelatedRecords(ctx: any, targetUserId: Id<"users">) 
   // 3. Delete ISP access logs
   const ispAccessLogs = await ctx.db
     .query("isp_access_logs")
-    .withIndex("by_userId", (q: any) => q.eq("userId", targetUserId))
+    .withIndex("by_clerkUserId", (q: any) => q.eq("clerkUserId", targetClerkUserId))
     .collect();
   for (const log of ispAccessLogs) {
     await ctx.db.delete(log._id);
@@ -51,7 +52,7 @@ async function deleteUserAndRelatedRecords(ctx: any, targetUserId: Id<"users">) 
   // 4. Delete role record
   const roleDoc = await ctx.db
     .query("roles")
-    .withIndex("by_userId", (q: any) => q.eq("userId", targetUserId))
+    .withIndex("by_clerkUserId", (q: any) => q.eq("clerkUserId", targetClerkUserId))
     .unique();
   if (roleDoc) {
     await ctx.db.delete(roleDoc._id);
@@ -60,7 +61,7 @@ async function deleteUserAndRelatedRecords(ctx: any, targetUserId: Id<"users">) 
   // 5. Delete auth accounts
   const authAccounts = await ctx.db
     .query("authAccounts")
-    .filter((q: any) => q.eq(q.field("userId"), targetUserId))
+    .filter((q: any) => q.eq(q.field("clerkUserId"), targetClerkUserId))
     .collect();
   for (const authAccount of authAccounts) {
     await ctx.db.delete(authAccount._id);
@@ -69,61 +70,57 @@ async function deleteUserAndRelatedRecords(ctx: any, targetUserId: Id<"users">) 
   // 6. Delete auth sessions
   const authSessions = await ctx.db
     .query("authSessions")
-    .filter((q: any) => q.eq(q.field("userId"), targetUserId))
+    .filter((q: any) => q.eq(q.field("clerkUserId"), targetClerkUserId))
     .collect();
   for (const session of authSessions) {
     await ctx.db.delete(session._id);
   }
 
-  // 7. Delete the user account
-  await ctx.db.delete(targetUserId);
+  // No direct deletion of "user" account as it's now tied to "employees" table
+  // and identified by clerkUserId (string)
 }
 
 // Clean up orphaned users (users without employee records)
 export const cleanupOrphanedUsers = mutation({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
-    await requireAdminAccess(ctx, userId);
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
+    await requireAdminAccess(ctx, clerkUserId);
     
-    const allUsers = await ctx.db.query("users").collect();
     const allEmployees = await ctx.db.query("employees").collect();
     const allRoles = await ctx.db.query("roles").collect();
     
-    // Create a set of user emails that have employee records
-    const employeeUserEmails = new Set(
-      allEmployees.map(emp => emp.email || emp.workEmail).filter(Boolean)
+    // Create a set of clerkUserIds that have employee records
+    const employeeClerkUserIds = new Set(
+      allEmployees.map(emp => emp.clerkUserId).filter(Boolean)
     );
     
-    // Create a set of user IDs that have roles
-    const roleUserIds = new Set(allRoles.map(role => role.userId));
+    // Create a set of clerkUserIds that have roles
+    const roleClerkUserIds = new Set(allRoles.map(role => role.clerkUserId));
     
     const deletedUsers = [];
     
-    for (const user of allUsers) {
-      // Skip the current admin user
-      if (user._id === userId) continue;
+    // Iterate through roles to find those without a corresponding employee
+    for (const role of allRoles) {
+      // Skip the current admin user's role
+      if (role.clerkUserId === clerkUserId) continue;
       
-      // Check if user has an employee record
-      const hasEmployee = user.email && employeeUserEmails.has(user.email);
-      
-      // A user is orphaned if they don't have an employee record
-      // (even if they have a role, because roles should only exist for employees)
-      if (!hasEmployee) {
-        await deleteUserAndRelatedRecords(ctx, user._id);
+      // A role is orphaned if its clerkUserId doesn't have an employee record
+      if (!employeeClerkUserIds.has(role.clerkUserId)) {
+        await deleteUserAndRelatedRecords(ctx, role.clerkUserId);
         deletedUsers.push({
-          id: user._id,
-          email: user.email,
-          name: user.name,
+          clerkUserId: role.clerkUserId,
+          role: role.role,
         });
       }
     }
     
     return {
       success: true,
-      totalUsers: allUsers.length,
-      orphanedFound: deletedUsers.length,
+      totalEmployees: allEmployees.length,
+      orphanedRolesFound: deletedUsers.length,
       deleted: deletedUsers,
     };
   },

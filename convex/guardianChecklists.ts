@@ -1,13 +1,13 @@
 import { query, mutation, action, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
-import { getAuthUserId } from "@convex-dev/auth/server";
-import { Id } from "./_generated/dataModel";
+// import { getAuthUserId } from "@convex-dev/auth/server"; // Removed as per plan
+// import { Id } from "./_generated/dataModel"; // Removed as Id<"users"> is no longer used
 import { internal } from "./_generated/api";
 
 // Helper: Audit
-async function audit(ctx: any, event: string, userId: Id<"users"> | null, details?: string) {
+async function audit(ctx: any, event: string, clerkUserId: string | null, details?: string) {
   await ctx.db.insert("audit_logs", {
-    userId: userId ?? undefined,
+    clerkUserId: clerkUserId ?? undefined,
     event,
     timestamp: Date.now(),
     deviceId: "system",
@@ -29,22 +29,23 @@ export const createChecklistTemplate = mutation({
     })),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    const role = await ctx.db.query("roles").withIndex("by_userId", (q) => q.eq("userId", userId)).unique();
+    const role = await ctx.db.query("roles").withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId)).unique();
     if (!role || role.role !== "admin") throw new Error("Forbidden");
     
     const templateId = await ctx.db.insert("guardian_checklist_templates", {
       name: args.name,
       description: args.description,
       questions: args.questions,
-      createdBy: userId,
+      createdBy: clerkUserId,
       createdAt: Date.now(),
       active: true,
     });
     
-    await audit(ctx, "create_checklist_template", userId, `templateId=${templateId}`);
+    await audit(ctx, "create_checklist_template", clerkUserId, `templateId=${templateId}`);
     return templateId;
   },
 });
@@ -53,8 +54,12 @@ export const createChecklistTemplate = mutation({
 export const listChecklistTemplates = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
+    
+    // Assuming non-admin users can also view templates, but this might need a more specific role check
+    // For now, just check if authenticated. If templates are admin-only, add requireAdmin check.
     
     return await ctx.db.query("guardian_checklist_templates").collect();
   },
@@ -68,10 +73,11 @@ export const sendChecklistToGuardian = mutation({
     guardianEmail: v.string(),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    const role = await ctx.db.query("roles").withIndex("by_userId", (q) => q.eq("userId", userId)).unique();
+    const role = await ctx.db.query("roles").withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId)).unique();
     if (!role || !["admin", "supervisor"].includes(role.role || "")) throw new Error("Forbidden");
     
     const token = Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -87,7 +93,7 @@ export const sendChecklistToGuardian = mutation({
       completed: false,
     });
     
-    await audit(ctx, "send_guardian_checklist", userId, `linkId=${linkId}`);
+    await audit(ctx, "send_guardian_checklist", clerkUserId, `linkId=${linkId}`);
     
     // Schedule email action
     await ctx.scheduler.runAfter(0, internal.complianceEmails.sendGuardianChecklistEmail, {
@@ -147,6 +153,9 @@ export const submitChecklistResponses = mutation({
       responses,
     });
     
+    // Audit this action (no clerkUserId available for public mutation)
+    await audit(ctx, "submit_guardian_checklist", null, `linkId=${link._id},guardianEmail=${link.guardianEmail}`);
+    
     return { success: true };
   },
 });
@@ -155,10 +164,11 @@ export const submitChecklistResponses = mutation({
 export const listChecklistLinks = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    const role = await ctx.db.query("roles").withIndex("by_userId", (q) => q.eq("userId", userId)).unique();
+    const role = await ctx.db.query("roles").withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId)).unique();
     if (!role) throw new Error("Forbidden");
     
     const links = await ctx.db.query("guardian_checklist_links").collect();

@@ -1,20 +1,20 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
-import { getAuthUserId } from "@convex-dev/auth/server";
-import { Id } from "./_generated/dataModel";
+// import { getAuthUserId } from "@convex-dev/auth/server"; // Removed as per plan
+// import { Id } from "./_generated/dataModel"; // Removed as Id<"users"> is no longer used
 
 // Helper: Get user role doc
-async function getUserRoleDoc(ctx: any, userId: Id<"users">) {
+async function getUserRoleDoc(ctx: any, clerkUserId: string) {
   return await ctx.db
     .query("roles")
-    .withIndex("by_userId", (q: any) => q.eq("userId", userId))
+    .withIndex("by_clerkUserId", (q: any) => q.eq("clerkUserId", clerkUserId))
     .unique();
 }
 
 // Helper: Audit
-async function audit(ctx: any, event: string, userId: Id<"users"> | null, details?: string) {
+async function audit(ctx: any, event: string, clerkUserId: string | null, details?: string) {
   await ctx.db.insert("audit_logs", {
-    userId: userId ?? undefined,
+    clerkUserId: clerkUserId,
     event,
     timestamp: Date.now(),
     deviceId: "system",
@@ -27,10 +27,11 @@ async function audit(ctx: any, event: string, userId: Id<"users"> | null, detail
 export const generateFireEvacUploadUrl = mutation({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    const userRole = await getUserRoleDoc(ctx, userId);
+    const userRole = await getUserRoleDoc(ctx, clerkUserId);
     if (!userRole || !["admin", "supervisor"].includes(userRole.role)) {
       throw new Error("Only admins and supervisors can upload fire evacuation plans");
     }
@@ -54,10 +55,11 @@ export const saveResidentFireEvacPlan = mutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    const userRole = await getUserRoleDoc(ctx, userId);
+    const userRole = await getUserRoleDoc(ctx, clerkUserId);
     if (!userRole || !["admin", "supervisor"].includes(userRole.role)) {
       throw new Error("Only admins and supervisors can upload fire evacuation plans");
     }
@@ -91,10 +93,10 @@ export const saveResidentFireEvacPlan = mutation({
       specialInstructions: args.specialInstructions,
       notes: args.notes,
       createdAt: Date.now(),
-      createdBy: userId,
+      createdBy: clerkUserId,
     });
     
-    await audit(ctx, "upload_fire_evac_plan", userId, `residentId=${args.residentId},version=${newVersion}`);
+    await audit(ctx, "upload_fire_evac_plan", clerkUserId, `residentId=${args.residentId},version=${newVersion}`);
     return { success: true, version: newVersion };
   },
 });
@@ -103,10 +105,11 @@ export const saveResidentFireEvacPlan = mutation({
 export const getResidentFireEvacPlans = query({
   args: { residentId: v.id("residents") },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    const userRole = await getUserRoleDoc(ctx, userId);
+    const userRole = await getUserRoleDoc(ctx, clerkUserId);
     if (!userRole || !["admin", "supervisor", "staff"].includes(userRole.role)) {
       throw new Error("Care access required");
     }

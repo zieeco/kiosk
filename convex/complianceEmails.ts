@@ -7,9 +7,9 @@ import { Resend } from "resend";
 export const sendComplianceReminderEmails = internalAction({
   args: {
     itemIds: v.array(v.string()),
-    userId: v.id("users"),
+    clerkUserId: v.string(), // Changed from userId: v.id("users")
   },
-  handler: async (ctx, { itemIds, userId }): Promise<{ sent: number; total: number; results: any[] }> => {
+  handler: async (ctx, { itemIds, clerkUserId }): Promise<{ sent: number; total: number; results: any[] }> => {
     // Use custom Resend API key if available, otherwise fall back to Convex proxy
     const apiKey = process.env.RESEND_API_KEY || process.env.CONVEX_RESEND_API_KEY;
     if (!apiKey) {
@@ -22,13 +22,13 @@ export const sendComplianceReminderEmails = internalAction({
       itemIds,
     });
     
-    // Get user details
-    const user = await ctx.runQuery(internal.complianceEmails.getUserForEmail, {
-      userId,
+    // Get user details (employee)
+    const employee = await ctx.runQuery(internal.complianceEmails.getUserForEmail, {
+      clerkUserId, // Changed from userId
     });
     
-    if (!user || !user.email) {
-      throw new Error("User not found or email missing");
+    if (!employee || !employee.workEmail) { // Changed from user.email
+      throw new Error("Employee not found or work email missing"); // Changed error message
     }
     
     // Get all admins and supervisors
@@ -95,7 +95,7 @@ export const sendComplianceReminderEmails = internalAction({
           </div>
           
           <p style="color: #555; font-size: 14px; margin-top: 30px; padding-top: 20px; border-top: 1px solid #dee2e6;">
-            This reminder was sent by ${user.name} from the compliance management system.
+            This reminder was sent by ${employee.name || employee.workEmail} from the compliance management system.
           </p>
         </div>
       </div>
@@ -104,26 +104,26 @@ export const sendComplianceReminderEmails = internalAction({
     const results: any[] = [];
     
     for (const recipient of recipients) {
-      if (!recipient.email) continue;
+      if (!recipient.workEmail) continue; // Changed from recipient.email
       
       try {
         const fromEmail = process.env.FROM_EMAIL || "Compliance System <noreply@compliance.example.com>";
         const { data, error } = await resend.emails.send({
           from: fromEmail,
-          to: recipient.email,
+          to: recipient.workEmail, // Changed from recipient.email
           subject: `Compliance Reminder: ${overdueItems.length} Overdue, ${dueSoonItems.length} Due Soon`,
           html: emailHtml,
         });
         
         if (error) {
-          console.error(`Failed to send to ${recipient.email}:`, error);
-          results.push({ email: recipient.email, success: false, error });
+          console.error(`Failed to send to ${recipient.workEmail}:`, error); // Changed from recipient.email
+          results.push({ email: recipient.workEmail, success: false, error }); // Changed from recipient.email
         } else {
-          results.push({ email: recipient.email, success: true, messageId: data?.id });
+          results.push({ email: recipient.workEmail, success: true, messageId: data?.id }); // Changed from recipient.email
         }
       } catch (error) {
-        console.error(`Error sending to ${recipient.email}:`, error);
-        results.push({ email: recipient.email, success: false, error });
+        console.error(`Error sending to ${recipient.workEmail}:`, error); // Changed from recipient.email
+        results.push({ email: recipient.workEmail, success: false, error }); // Changed from recipient.email
       }
     }
     
@@ -297,9 +297,12 @@ export const getComplianceItemsForEmail = internalQuery({
 });
 
 export const getUserForEmail = internalQuery({
-  args: { userId: v.id("users") },
-  handler: async (ctx, { userId }) => {
-    return await ctx.db.get(userId);
+  args: { clerkUserId: v.string() }, // Changed from userId: v.id("users")
+  handler: async (ctx, { clerkUserId }) => { // Changed from userId
+    return await ctx.db
+      .query("employees") // Changed from users
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId)) // Changed index and field
+      .unique();
   },
 });
 
@@ -307,16 +310,19 @@ export const getComplianceRecipients = internalQuery({
   args: {},
   handler: async (ctx) => {
     const roles = await ctx.db.query("roles").collect();
-    const adminAndSupervisorIds = roles
+    const adminAndSupervisorClerkUserIds = roles // Changed variable name
       .filter((r: any) => r.role === "admin" || r.role === "supervisor")
-      .map((r: any) => r.userId);
+      .map((r: any) => r.clerkUserId); // Changed from userId
     
-    const users = [];
-    for (const id of adminAndSupervisorIds) {
-      const user = await ctx.db.get(id);
-      if (user) users.push(user);
+    const employees = []; // Changed from users
+    for (const clerkUserId of adminAndSupervisorClerkUserIds) { // Changed from id of adminAndSupervisorIds
+      const employee = await ctx.db
+        .query("employees") // Changed from users
+        .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId)) // Changed index and field
+        .unique();
+      if (employee) employees.push(employee);
     }
     
-    return users;
+    return employees; // Changed from users
   },
 });

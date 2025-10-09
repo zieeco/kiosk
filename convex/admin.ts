@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { getAuthUserId } from "@convex-dev/auth/server";
+// import { getAuthUserId } from "@convex-dev/auth/server"; // Removed as per plan
 
 // Check if any admin exists in the system
 export const hasAdminUser = query({
@@ -18,10 +18,11 @@ export const hasAdminUser = query({
 export const createFirstAdmin = mutation({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
       throw new Error("Not authenticated");
     }
+    const clerkUserId = identity.subject;
 
     // Check if any admin already exists
     const existingAdmin = await ctx.db
@@ -35,7 +36,7 @@ export const createFirstAdmin = mutation({
 
     // Create admin role for this user
     await ctx.db.insert("roles", {
-      userId,
+      clerkUserId,
       role: "admin",
       locations: [],
       assignedAt: Date.now(),
@@ -49,14 +50,15 @@ export const createFirstAdmin = mutation({
 export const getLocations = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
       throw new Error("Not authenticated");
     }
+    const clerkUserId = identity.subject;
 
     const userRole = await ctx.db
       .query("roles")
-      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId))
       .first();
 
     if (!userRole || userRole.role !== "admin") {
@@ -74,14 +76,15 @@ export const listLocations = getLocations;
 export const getRecentLogsForAdmin = query({
   args: { limit: v.number() },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
       throw new Error("Not authenticated");
     }
+    const clerkUserId = identity.subject;
 
     const userRole = await ctx.db
       .query("roles")
-      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId))
       .first();
 
     if (!userRole || userRole.role !== "admin") {
@@ -101,14 +104,15 @@ export const syncLocationsFromStrings = mutation({
     locationNames: v.array(v.string()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
       throw new Error("Not authenticated");
     }
+    const clerkUserId = identity.subject;
 
     const userRole = await ctx.db
       .query("roles")
-      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId))
       .first();
 
     if (!userRole || userRole.role !== "admin") {
@@ -125,7 +129,7 @@ export const syncLocationsFromStrings = mutation({
         await ctx.db.insert("locations", {
           name,
           status: "active",
-          createdBy: userId,
+          createdBy: clerkUserId,
           createdAt: Date.now(),
         });
       }
@@ -143,14 +147,15 @@ export const createLocation = mutation({
     capacity: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
       throw new Error("Not authenticated");
     }
+    const clerkUserId = identity.subject;
 
     const userRole = await ctx.db
       .query("roles")
-      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId))
       .first();
 
     if (!userRole || userRole.role !== "admin") {
@@ -162,7 +167,7 @@ export const createLocation = mutation({
       address: args.address,
       capacity: args.capacity,
       status: "active",
-      createdBy: userId,
+      createdBy: clerkUserId,
       createdAt: Date.now(),
     });
 
@@ -180,14 +185,15 @@ export const updateLocation = mutation({
     status: v.union(v.literal("active"), v.literal("inactive")),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
       throw new Error("Not authenticated");
     }
+    const clerkUserId = identity.subject;
 
     const userRole = await ctx.db
       .query("roles")
-      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId))
       .first();
 
     if (!userRole || userRole.role !== "admin") {
@@ -212,14 +218,15 @@ export const deleteLocation = mutation({
     locationId: v.id("locations"),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
       throw new Error("Not authenticated");
     }
+    const clerkUserId = identity.subject;
 
     const userRole = await ctx.db
       .query("roles")
-      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId))
       .first();
 
     if (!userRole || userRole.role !== "admin") {
@@ -250,14 +257,15 @@ export const deleteLocation = mutation({
 export const forceCreateAdmin = mutation({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
       throw new Error("Not authenticated");
     }
+    const clerkUserId = identity.subject;
 
     const existingRole = await ctx.db
       .query("roles")
-      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId))
       .first();
 
     if (existingRole) {
@@ -270,7 +278,7 @@ export const forceCreateAdmin = mutation({
     }
 
     await ctx.db.insert("roles", {
-      userId,
+      clerkUserId,
       role: "admin",
       locations: [],
       assignedAt: Date.now(),

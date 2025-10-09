@@ -1,13 +1,13 @@
 import { query, mutation, action, internalQuery, internalMutation, internalAction } from "./_generated/server";
 import { v } from "convex/values";
-import { getAuthUserId } from "@convex-dev/auth/server";
-import { Id } from "./_generated/dataModel";
+// import { getAuthUserId } from "@convex-dev/auth/server"; // Removed as per plan
+// import { Id } from "./_generated/dataModel"; // Removed as Id<"users"> is no longer used
 import { internal } from "./_generated/api";
 
 // Helper: Audit
-async function audit(ctx: any, event: string, userId: Id<"users"> | null, details?: string) {
+async function audit(ctx: any, event: string, clerkUserId: string | null, details?: string) {
   await ctx.db.insert("audit_logs", {
-    userId: userId ?? undefined,
+    clerkUserId: clerkUserId ?? undefined,
     event,
     timestamp: Date.now(),
     deviceId: "system",
@@ -106,13 +106,13 @@ export const internalListAdmins = internalQuery({
   args: {},
   handler: async (ctx) => {
     const roles = await ctx.db.query("roles").collect();
-    const adminIds = roles.filter((r: any) => r.role === "admin").map((r: any) => r.userId);
-    const users = [];
-    for (const id of adminIds) {
-      const user = await ctx.db.get(id);
-      if (user) users.push(user);
+    const adminClerkUserIds = roles.filter((r: any) => r.role === "admin").map((r: any) => r.clerkUserId);
+    const employees = [];
+    for (const clerkUserId of adminClerkUserIds) {
+      const employee = await ctx.db.query("employees").withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId)).unique();
+      if (employee) employees.push(employee);
     }
-    return users;
+    return employees;
   },
 });
 
@@ -120,9 +120,10 @@ export const internalListAdmins = internalQuery({
 export const listActiveAlerts = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return [];
-    const role = await ctx.db.query("roles").withIndex("by_userId", (q) => q.eq("userId", userId)).unique();
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return [];
+    const clerkUserId = identity.subject;
+    const role = await ctx.db.query("roles").withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId)).unique();
     if (!role) return [];
     const locations = role.locations ?? [];
     return await ctx.db
@@ -137,12 +138,13 @@ export const listActiveAlerts = query({
 export const dismissAlert = mutation({
   args: { alertId: v.id("compliance_alerts") },
   handler: async (ctx, { alertId }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     const alert = await ctx.db.get(alertId);
     if (!alert || !alert.active) throw new Error("Alert not found");
-    await ctx.db.patch(alertId, { active: false, dismissedBy: userId, dismissedAt: Date.now() });
-    await audit(ctx, "dismiss_alert", userId, `alertId=${alertId},type=${alert.type},location=${alert.location}`);
+    await ctx.db.patch(alertId, { active: false, dismissedBy: clerkUserId, dismissedAt: Date.now() });
+    await audit(ctx, "dismiss_alert", clerkUserId, `alertId=${alertId},type=${alert.type},location=${alert.location}`);
     return true;
   },
 });
@@ -151,15 +153,16 @@ export const dismissAlert = mutation({
 export const setAlertSchedule = mutation({
   args: { weekday: v.number(), hour: v.number(), minute: v.number() },
   handler: async (ctx, { weekday, hour, minute }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
-    const role = await ctx.db.query("roles").withIndex("by_userId", (q) => q.eq("userId", userId)).unique();
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
+    const role = await ctx.db.query("roles").withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId)).unique();
     if (!role || role.role !== "admin") throw new Error("Forbidden");
     const config = await ctx.db.query("config").first();
     if (config) {
       await ctx.db.patch(config._id, { alertWeekday: weekday, alertHour: hour, alertMinute: minute });
     }
-    await audit(ctx, "set_alert_schedule", userId, `weekday=${weekday},hour=${hour},minute=${minute}`);
+    await audit(ctx, "set_alert_schedule", clerkUserId, `weekday=${weekday},hour=${hour},minute=${minute}`);
     return true;
   },
 });
@@ -168,9 +171,10 @@ export const setAlertSchedule = mutation({
 export const generateFireEvacUploadUrl = mutation({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
-    const role = await ctx.db.query("roles").withIndex("by_userId", (q) => q.eq("userId", userId)).unique();
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
+    const role = await ctx.db.query("roles").withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId)).unique();
     if (!role || (role.role !== "admin" && role.role !== "supervisor")) {
       throw new Error("Forbidden: Only admins and supervisors can upload fire evacuation plans");
     }
@@ -189,9 +193,10 @@ export const uploadFireEvac = mutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
-    const role = await ctx.db.query("roles").withIndex("by_userId", (q) => q.eq("userId", userId)).unique();
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
+    const role = await ctx.db.query("roles").withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId)).unique();
     if (!role || (role.role !== "admin" && role.role !== "supervisor")) {
       throw new Error("Forbidden: Only admins and supervisors can upload fire evacuation plans");
     }
@@ -214,10 +219,11 @@ export const setIspDueDate = mutation({
 export const getComplianceOverview = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    const role = await ctx.db.query("roles").withIndex("by_userId", (q) => q.eq("userId", userId)).unique();
+    const role = await ctx.db.query("roles").withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId)).unique();
     if (!role) throw new Error("Forbidden");
     
     const userLocations = role.locations ?? [];
@@ -334,10 +340,11 @@ export const getComplianceOverview = query({
 export const getGuardianChecklistLinks = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    const role = await ctx.db.query("roles").withIndex("by_userId", (q) => q.eq("userId", userId)).unique();
+    const role = await ctx.db.query("roles").withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId)).unique();
     if (!role) throw new Error("Forbidden");
     
     const userLocations = role.locations ?? [];
@@ -377,10 +384,11 @@ export const getGuardianChecklistLinks = query({
 export const getFireEvacPlans = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    const role = await ctx.db.query("roles").withIndex("by_userId", (q) => q.eq("userId", userId)).unique();
+    const role = await ctx.db.query("roles").withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId)).unique();
     if (!role) throw new Error("Forbidden");
     
     const userLocations = role.locations ?? [];
@@ -433,15 +441,16 @@ export const getFireEvacPlans = query({
 export const sendComplianceReminders = mutation({
   args: { itemIds: v.array(v.string()) },
   handler: async (ctx, { itemIds }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    await audit(ctx, "send_compliance_reminders", userId, `itemCount=${itemIds.length}`);
+    await audit(ctx, "send_compliance_reminders", clerkUserId, `itemCount=${itemIds.length}`);
     
     // Schedule email action
     await ctx.scheduler.runAfter(0, internal.complianceEmails.sendComplianceReminderEmails, {
       itemIds,
-      userId,
+      clerkUserId,
     });
     
     return { sent: itemIds.length };
@@ -452,13 +461,14 @@ export const sendComplianceReminders = mutation({
 export const exportComplianceList = mutation({
   args: { itemIds: v.array(v.string()) },
   handler: async (ctx, { itemIds }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    const role = await ctx.db.query("roles").withIndex("by_userId", (q) => q.eq("userId", userId)).unique();
+    const role = await ctx.db.query("roles").withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", clerkUserId)).unique();
     if (!role || role.role !== "admin") throw new Error("Forbidden");
     
-    await audit(ctx, "export_compliance_list", userId, `itemCount=${itemIds.length}`);
+    await audit(ctx, "export_compliance_list", clerkUserId, `itemCount=${itemIds.length}`);
     
     return { exported: itemIds.length };
   },
@@ -468,8 +478,9 @@ export const exportComplianceList = mutation({
 export const resendGuardianLink = mutation({
   args: { linkId: v.id("guardian_checklist_links") },
   handler: async (ctx, { linkId }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
     const link = await ctx.db.get(linkId);
     if (!link) throw new Error("Link not found");
@@ -477,7 +488,7 @@ export const resendGuardianLink = mutation({
     const newExpiresAt = Date.now() + (30 * 24 * 60 * 60 * 1000);
     await ctx.db.patch(linkId, { expiresAt: newExpiresAt });
     
-    await audit(ctx, "resend_guardian_link", userId, `linkId=${linkId}`);
+    await audit(ctx, "resend_guardian_link", clerkUserId, `linkId=${linkId}`);
     
     // Schedule email action
     await ctx.scheduler.runAfter(0, internal.complianceEmails.sendGuardianChecklistEmail, {
@@ -554,10 +565,10 @@ export const sendAlertEmails = action({
     
     for (const alert of alerts) {
       for (const admin of admins) {
-        if (!admin || typeof admin.email !== "string") continue;
+        if (!admin || typeof admin.workEmail !== "string") continue;
         await resend.emails.send({
           from: fromEmail,
-          to: admin.email,
+          to: admin.workEmail,
           subject: `Compliance Alert: ${alert.type.toUpperCase()} due soon`,
           html: `<p>A compliance item (${alert.type}) is due soon for location: ${alert.location}.</p>
           <p><a href="${baseUrl}/?view=compliance">View details in the compliance dashboard (secure login required)</a></p>`,

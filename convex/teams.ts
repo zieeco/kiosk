@@ -1,13 +1,12 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
-import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 
 // Helper function to get user role
-async function getUserRole(ctx: any, userId: Id<"users">) {
+async function getUserRole(ctx: any, clerkUserId: string) {
   return await ctx.db
     .query("roles")
-    .withIndex("by_userId", (q: any) => q.eq("userId", userId))
+    .withIndex("by_clerkUserId", (q: any) => q.eq("clerkUserId", clerkUserId))
     .unique();
 }
 
@@ -18,21 +17,22 @@ async function getTeamMemberIds(ctx: any, userLocations: string[]) {
     .filter((role: any) => 
       role.locations?.some((loc: string) => userLocations.includes(loc))
     )
-    .map((role: any) => role.userId);
+    .map((role: any) => role.clerkUserId);
 }
 
 export const getTeamActivities = query({
   args: {
-    staffId: v.optional(v.id("users")),
+    staffId: v.optional(v.string()),
     dateFrom: v.optional(v.number()),
     dateTo: v.optional(v.number()),
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
 
-    const userRole = await getUserRole(ctx, userId);
+    const userRole = await getUserRole(ctx, clerkUserId);
     if (!userRole || !["admin", "supervisor"].includes(userRole.role)) {
       throw new Error("Access denied");
     }
@@ -68,11 +68,11 @@ export const getTeamActivities = query({
     }
 
     // Enrich with user and resident data
-    const users = await ctx.db.query("users").collect();
+    const employees = await ctx.db.query("employees").collect();
     const residents = await ctx.db.query("residents").collect();
 
     return logs.map(log => {
-      const author = users.find(u => u._id === log.authorId);
+      const author = employees.find(e => e.clerkUserId === log.authorId);
       const resident = residents.find(r => r._id === log.residentId);
       
       return {
@@ -80,7 +80,7 @@ export const getTeamActivities = query({
         residentId: log.residentId,
         residentName: resident?.name || "Unknown Resident",
         authorId: log.authorId,
-        authorName: author?.name || author?.email || "Unknown User",
+        authorName: author?.name || author?.workEmail || "Unknown User",
         template: log.template,
         content: log.content,
         createdAt: log.createdAt || log._creationTime,
@@ -92,23 +92,24 @@ export const getTeamActivities = query({
 
 export const getAllEmployeeActivities = query({
   args: {
-    staffId: v.optional(v.id("users")),
+    staffId: v.optional(v.string()),
     dateFrom: v.optional(v.number()),
     dateTo: v.optional(v.number()),
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
 
-    const userRole = await getUserRole(ctx, userId);
+    const userRole = await getUserRole(ctx, clerkUserId);
     if (!userRole || userRole.role !== "admin") {
       throw new Error("Admin access required");
     }
 
     // Get all employee IDs
     const allRoles = await ctx.db.query("roles").collect();
-    const employeeIds = allRoles.map((role: any) => role.userId);
+    const employeeIds = allRoles.map((role: any) => role.clerkUserId);
 
     // Get logs and filter
     let logs = await ctx.db.query("resident_logs").collect();
@@ -133,11 +134,11 @@ export const getAllEmployeeActivities = query({
       logs = logs.slice(0, args.limit);
     }
 
-    const users = await ctx.db.query("users").collect();
+    const employees = await ctx.db.query("employees").collect();
     const residents = await ctx.db.query("residents").collect();
 
     return logs.map(log => {
-      const author = users.find(u => u._id === log.authorId);
+      const author = employees.find(e => e.clerkUserId === log.authorId);
       const resident = residents.find(r => r._id === log.residentId);
       
       return {
@@ -145,7 +146,7 @@ export const getAllEmployeeActivities = query({
         residentId: log.residentId,
         residentName: resident?.name || "Unknown Resident",
         authorId: log.authorId,
-        authorName: author?.name || author?.email || "Unknown User",
+        authorName: author?.name || author?.workEmail || "Unknown User",
         template: log.template,
         content: log.content,
         createdAt: log.createdAt || log._creationTime,
@@ -161,10 +162,11 @@ export const getTeamLogStats = query({
     dateTo: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
 
-    const userRole = await getUserRole(ctx, userId);
+    const userRole = await getUserRole(ctx, clerkUserId);
     if (!userRole || !["admin", "supervisor"].includes(userRole.role)) {
       throw new Error("Access denied");
     }
@@ -193,14 +195,14 @@ export const getTeamLogStats = query({
       logsByLocation: {} as Record<string, number>,
     };
 
-    const users = await ctx.db.query("users").collect();
+    const employees = await ctx.db.query("employees").collect();
     const residents = await ctx.db.query("residents").collect();
 
     logs.forEach(log => {
-      const author = users.find(u => u._id === log.authorId);
+      const author = employees.find(e => e.clerkUserId === log.authorId);
       const resident = residents.find(r => r._id === log.residentId);
       
-      const authorName = author?.name || author?.email || "Unknown User";
+      const authorName = author?.name || author?.workEmail || "Unknown User";
       const location = log.location || resident?.location || "Unknown Location";
       
       stats.logsByAuthor[authorName] = (stats.logsByAuthor[authorName] || 0) + 1;
@@ -216,12 +218,15 @@ export const getTeamLogStats = query({
 
 // Get team members for a supervisor
 export const getTeamMembers = query({
-  args: {},
+  args: {
+    staffId: v.optional(v.string()),
+  },
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
 
-    const userRole = await getUserRole(ctx, userId);
+    const userRole = await getUserRole(ctx, clerkUserId);
     if (!userRole || !["admin", "supervisor"].includes(userRole.role)) {
       throw new Error("Access denied");
     }
@@ -229,17 +234,17 @@ export const getTeamMembers = query({
     const userLocations = userRole.locations || [];
     const teamMemberIds = await getTeamMemberIds(ctx, userLocations);
 
-    const users = await ctx.db.query("users").collect();
+    const employees = await ctx.db.query("employees").collect();
     const roles = await ctx.db.query("roles").collect();
 
-    return teamMemberIds.map((memberId: Id<"users">) => {
-      const user = users.find(u => u._id === memberId);
-      const role = roles.find(r => r.userId === memberId);
+    return teamMemberIds.map((memberId: string) => {
+      const employee = employees.find(e => e.clerkUserId === memberId);
+      const role = roles.find(r => r.clerkUserId === memberId);
       
       return {
         id: memberId,
-        name: user?.name || user?.email || "Unknown User",
-        email: user?.email,
+        name: employee?.name || employee?.workEmail || "Unknown User",
+        email: employee?.workEmail,
         role: role?.role || "unknown",
         locations: role?.locations || [],
       };
@@ -251,23 +256,24 @@ export const getTeamMembers = query({
 export const getAllEmployees = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
 
-    const userRole = await getUserRole(ctx, userId);
+    const userRole = await getUserRole(ctx, clerkUserId);
     if (!userRole || userRole.role !== "admin") {
       throw new Error("Admin access required");
     }
 
-    const users = await ctx.db.query("users").collect();
+    const employees = await ctx.db.query("employees").collect();
     const roles = await ctx.db.query("roles").collect();
 
-    return users.map(user => {
-      const role = roles.find(r => r.userId === user._id);
+    return employees.map(employee => {
+      const role = roles.find(r => r.clerkUserId === employee.clerkUserId);
       return {
-        id: user._id,
-        name: user.name || user.email || "Unknown User",
-        email: user.email,
+        id: employee.clerkUserId,
+        name: employee.name || employee.workEmail || "Unknown User",
+        email: employee.workEmail,
         role: role?.role || "unknown",
         locations: role?.locations || [],
       };
@@ -279,10 +285,11 @@ export const getAllEmployees = query({
 export const getManagedLocations = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
 
-    const userRole = await getUserRole(ctx, userId);
+    const userRole = await getUserRole(ctx, clerkUserId);
     if (!userRole) throw new Error("Access denied");
 
     return userRole.locations || [];
@@ -296,10 +303,11 @@ export const getTeamShiftSummary = query({
     dateTo: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
 
-    const userRole = await getUserRole(ctx, userId);
+    const userRole = await getUserRole(ctx, clerkUserId);
     if (!userRole || !["admin", "supervisor"].includes(userRole.role)) {
       throw new Error("Access denied");
     }
@@ -310,7 +318,7 @@ export const getTeamShiftSummary = query({
     let shifts = await ctx.db.query("shifts").collect();
     
     // Filter by team members
-    shifts = shifts.filter(shift => teamMemberIds.includes(shift.userId));
+    shifts = shifts.filter(shift => teamMemberIds.includes(shift.clerkUserId));
     
     // Filter by date range
     if (args.dateFrom || args.dateTo) {
@@ -322,16 +330,16 @@ export const getTeamShiftSummary = query({
       });
     }
 
-    const users = await ctx.db.query("users").collect();
+    const employees = await ctx.db.query("employees").collect();
 
     return shifts.map(shift => {
-      const user = users.find(u => u._id === shift.userId);
+      const employee = employees.find(e => e.clerkUserId === shift.clerkUserId);
       const duration = shift.clockOutTime ? shift.clockOutTime - shift.clockInTime : Date.now() - shift.clockInTime;
       
       return {
         id: shift._id,
-        staffId: shift.userId,
-        staffName: user?.name || user?.email || "Unknown User",
+        staffId: shift.clerkUserId,
+        staffName: employee?.name || employee?.workEmail || "Unknown User",
         location: shift.location,
         clockInTime: shift.clockInTime,
         clockOutTime: shift.clockOutTime,
@@ -349,10 +357,11 @@ export const getAllEmployeeShiftSummary = query({
     dateTo: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
 
-    const userRole = await getUserRole(ctx, userId);
+    const userRole = await getUserRole(ctx, clerkUserId);
     if (!userRole || userRole.role !== "admin") {
       throw new Error("Admin access required");
     }
@@ -368,16 +377,16 @@ export const getAllEmployeeShiftSummary = query({
       });
     }
 
-    const users = await ctx.db.query("users").collect();
+    const employees = await ctx.db.query("employees").collect();
 
     return shifts.map(shift => {
-      const user = users.find(u => u._id === shift.userId);
+      const employee = employees.find(e => e.clerkUserId === shift.clerkUserId);
       const duration = shift.clockOutTime ? shift.clockOutTime - shift.clockInTime : Date.now() - shift.clockInTime;
       
       return {
         id: shift._id,
-        staffId: shift.userId,
-        staffName: user?.name || user?.email || "Unknown User",
+        staffId: shift.clerkUserId,
+        staffName: employee?.name || employee?.workEmail || "Unknown User",
         location: shift.location,
         clockInTime: shift.clockInTime,
         clockOutTime: shift.clockOutTime,

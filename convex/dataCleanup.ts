@@ -1,20 +1,20 @@
 import { mutation, query, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
-import { getAuthUserId } from "@convex-dev/auth/server";
-import { Id } from "./_generated/dataModel";
+// import { getAuthUserId } from "@convex-dev/auth/server"; // Removed as per plan
+// import { Id } from "./_generated/dataModel"; // Removed as Id<"users"> is no longer used
 
 // Helper: Get user role doc
-async function getUserRoleDoc(ctx: any, userId: Id<"users">) {
+async function getUserRoleDoc(ctx: any, clerkUserId: string) {
   return await ctx.db
     .query("roles")
-    .withIndex("by_userId", (q: any) => q.eq("userId", userId))
+    .withIndex("by_clerkUserId", (q: any) => q.eq("clerkUserId", clerkUserId))
     .unique();
 }
 
 // Helper: Audit
-async function audit(ctx: any, event: string, userId: Id<"users"> | null, details?: string) {
+async function audit(ctx: any, event: string, clerkUserId: string | null, details?: string) {
   await ctx.db.insert("audit_logs", {
-    userId: userId ?? undefined,
+    clerkUserId: clerkUserId ?? undefined,
     event,
     timestamp: Date.now(),
     deviceId: "system",
@@ -24,10 +24,10 @@ async function audit(ctx: any, event: string, userId: Id<"users"> | null, detail
 }
 
 // Helper: Check admin access
-async function requireAdmin(ctx: any, userId: Id<"users">) {
-  const userRole = await getUserRoleDoc(ctx, userId);
+async function requireAdmin(ctx: any, clerkUserId: string) {
+  const userRole = await getUserRoleDoc(ctx, clerkUserId);
   if (!userRole || userRole.role !== "admin") {
-    await audit(ctx, "access_denied", userId, "admin_required");
+    await audit(ctx, "access_denied", clerkUserId, "admin_required");
     throw new Error("Admin access required");
   }
   return userRole;
@@ -37,9 +37,10 @@ async function requireAdmin(ctx: any, userId: Id<"users">) {
 export const scanOrphanedData = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
-    await requireAdmin(ctx, userId);
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
+    await requireAdmin(ctx, clerkUserId);
 
     const orphanedData: Record<string, Array<any>> = {
       roles: [],
@@ -54,11 +55,12 @@ export const scanOrphanedData = query({
       guardians: [],
       complianceAlerts: [],
       kiosks: [],
+      employees: [], // Added for orphaned employees
     };
 
-    // Get all users for reference
-    const allUsers = await ctx.db.query("users").collect();
-    const userIds = new Set(allUsers.map(u => u._id));
+    // Get all employees for reference
+    const allEmployees = await ctx.db.query("employees").collect();
+    const employeeClerkUserIds = new Set(allEmployees.map(e => e.clerkUserId));
 
     // Get all residents for reference
     const allResidents = await ctx.db.query("residents").collect();
@@ -76,40 +78,40 @@ export const scanOrphanedData = query({
     const allKiosks = await ctx.db.query("kiosks").collect();
     const kioskIds = new Set(allKiosks.map(k => k._id));
 
-    // 1. Check roles with non-existent users
+    // 1. Check roles with non-existent employees
     const roles = await ctx.db.query("roles").collect();
     for (const role of roles) {
-      if (!userIds.has(role.userId)) {
+      if (!employeeClerkUserIds.has(role.clerkUserId)) {
         orphanedData.roles.push({
           id: role._id,
-          userId: role.userId,
+          clerkUserId: role.clerkUserId,
           role: role.role,
-          reason: "User does not exist",
+          reason: "Employee does not exist",
         });
       }
     }
 
-    // 2. Check shifts with non-existent users or kiosks
+    // 2. Check shifts with non-existent employees or kiosks
     const shifts = await ctx.db.query("shifts").collect();
     for (const shift of shifts) {
-      if (!userIds.has(shift.userId)) {
+      if (!employeeClerkUserIds.has(shift.clerkUserId)) {
         orphanedData.shifts.push({
           id: shift._id,
-          userId: shift.userId,
+          clerkUserId: shift.clerkUserId,
           location: shift.location,
-          reason: "User does not exist",
+          reason: "Employee does not exist",
         });
       } else if (shift.kioskId && !kioskIds.has(shift.kioskId)) {
         orphanedData.shifts.push({
           id: shift._id,
-          userId: shift.userId,
+          clerkUserId: shift.clerkUserId,
           kioskId: shift.kioskId,
           reason: "Kiosk does not exist",
         });
       }
     }
 
-    // 3. Check resident_logs with non-existent residents or users
+    // 3. Check resident_logs with non-existent residents or employees
     const residentLogs = await ctx.db.query("resident_logs").collect();
     for (const log of residentLogs) {
       if (!residentIds.has(log.residentId)) {
@@ -118,30 +120,30 @@ export const scanOrphanedData = query({
           residentId: log.residentId,
           reason: "Resident does not exist",
         });
-      } else if (log.authorId && !userIds.has(log.authorId)) {
+      } else if (log.authorId && !employeeClerkUserIds.has(log.authorId)) {
         orphanedData.residentLogs.push({
           id: log._id,
           residentId: log.residentId,
           authorId: log.authorId,
-          reason: "Author does not exist",
+          reason: "Author (employee) does not exist",
         });
       }
     }
 
-    // 4. Check audit_logs with non-existent users
+    // 4. Check audit_logs with non-existent employees
     const auditLogs = await ctx.db.query("audit_logs").collect();
     for (const log of auditLogs) {
-      if (log.userId && !userIds.has(log.userId)) {
+      if (log.clerkUserId && !employeeClerkUserIds.has(log.clerkUserId)) {
         orphanedData.auditLogs.push({
           id: log._id,
-          userId: log.userId,
+          clerkUserId: log.clerkUserId,
           event: log.event,
-          reason: "User does not exist",
+          reason: "Employee does not exist",
         });
       }
     }
 
-    // 5. Check isp_files with non-existent residents or users
+    // 5. Check isp_files with non-existent residents or employees
     const ispFiles = await ctx.db.query("isp_files").collect();
     for (const file of ispFiles) {
       if (!residentIds.has(file.residentId)) {
@@ -151,17 +153,17 @@ export const scanOrphanedData = query({
           versionLabel: file.versionLabel,
           reason: "Resident does not exist",
         });
-      } else if (!userIds.has(file.uploadedBy)) {
+      } else if (!employeeClerkUserIds.has(file.uploadedBy)) {
         orphanedData.ispFiles.push({
           id: file._id,
           residentId: file.residentId,
           uploadedBy: file.uploadedBy,
-          reason: "Uploader does not exist",
+          reason: "Uploader (employee) does not exist",
         });
       }
     }
 
-    // 6. Check isp_access_logs with non-existent ISP files, residents, or users
+    // 6. Check isp_access_logs with non-existent ISP files, residents, or employees
     const ispAccessLogs = await ctx.db.query("isp_access_logs").collect();
     for (const log of ispAccessLogs) {
       if (!ispFileIds.has(log.ispFileId)) {
@@ -176,16 +178,16 @@ export const scanOrphanedData = query({
           residentId: log.residentId,
           reason: "Resident does not exist",
         });
-      } else if (!userIds.has(log.userId)) {
+      } else if (!employeeClerkUserIds.has(log.clerkUserId)) {
         orphanedData.ispAccessLogs.push({
           id: log._id,
-          userId: log.userId,
-          reason: "User does not exist",
+          clerkUserId: log.clerkUserId,
+          reason: "Employee does not exist",
         });
       }
     }
 
-    // 7. Check isp_acknowledgments with non-existent residents, users, or ISPs
+    // 7. Check isp_acknowledgments with non-existent residents, employees, or ISPs
     const ispAcks = await ctx.db.query("isp_acknowledgments").collect();
     for (const ack of ispAcks) {
       if (!residentIds.has(ack.residentId)) {
@@ -194,11 +196,11 @@ export const scanOrphanedData = query({
           residentId: ack.residentId,
           reason: "Resident does not exist",
         });
-      } else if (!userIds.has(ack.userId)) {
+      } else if (!employeeClerkUserIds.has(ack.clerkUserId)) {
         orphanedData.ispAcknowledgments.push({
           id: ack._id,
-          userId: ack.userId,
-          reason: "User does not exist",
+          clerkUserId: ack.clerkUserId,
+          reason: "Employee does not exist",
         });
       } else if (!ispIds.has(ack.ispId)) {
         orphanedData.ispAcknowledgments.push({
@@ -251,35 +253,49 @@ export const scanOrphanedData = query({
       }
     }
 
-    // 11. Check compliance_alerts with non-existent users
+    // 11. Check compliance_alerts with non-existent employees
     const alerts = await ctx.db.query("compliance_alerts").collect();
     for (const alert of alerts) {
-      if (alert.dismissedBy && !userIds.has(alert.dismissedBy)) {
+      if (alert.dismissedBy && !employeeClerkUserIds.has(alert.dismissedBy)) {
         orphanedData.complianceAlerts.push({
           id: alert._id,
           type: alert.type,
           dismissedBy: alert.dismissedBy,
-          reason: "Dismissed by user does not exist",
+          reason: "Dismissed by employee does not exist",
         });
       }
     }
 
-    // 12. Check kiosks with non-existent users
+    // 12. Check kiosks with non-existent employees
     const kiosks = await ctx.db.query("kiosks").collect();
     for (const kiosk of kiosks) {
-      if (kiosk.createdBy && !userIds.has(kiosk.createdBy)) {
+      if (kiosk.createdBy && !employeeClerkUserIds.has(kiosk.createdBy)) {
         orphanedData.kiosks.push({
           id: kiosk._id,
           name: kiosk.name,
           createdBy: kiosk.createdBy,
-          reason: "Created by user does not exist",
+          reason: "Created by employee does not exist",
         });
-      } else if (kiosk.registeredBy && !userIds.has(kiosk.registeredBy)) {
+      } else if (kiosk.registeredBy && !employeeClerkUserIds.has(kiosk.registeredBy)) {
         orphanedData.kiosks.push({
           id: kiosk._id,
           name: kiosk.name,
           registeredBy: kiosk.registeredBy,
-          reason: "Registered by user does not exist",
+          reason: "Registered by employee does not exist",
+        });
+      }
+    }
+
+    // 13. Check employees with no roles (new orphaned category)
+    for (const employee of allEmployees) {
+      const hasRole = roles.some(role => role.clerkUserId === employee.clerkUserId);
+      if (!hasRole) {
+        orphanedData.employees.push({
+          id: employee._id,
+          clerkUserId: employee.clerkUserId,
+          name: employee.name,
+          workEmail: employee.workEmail,
+          reason: "Employee has no assigned role",
         });
       }
     }
@@ -303,6 +319,7 @@ export const scanOrphanedData = query({
         guardians: orphanedData.guardians.length,
         complianceAlerts: orphanedData.complianceAlerts.length,
         kiosks: orphanedData.kiosks.length,
+        employees: orphanedData.employees.length, // Added to summary
       },
     };
   },
@@ -314,16 +331,17 @@ export const cleanupOrphanedData = mutation({
     categories: v.array(v.string()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
-    await requireAdmin(ctx, userId);
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
+    await requireAdmin(ctx, clerkUserId);
 
     let deletedCount = 0;
     const deletionLog: Record<string, number> = {};
 
-    // Get all users for reference
-    const allUsers = await ctx.db.query("users").collect();
-    const userIds = new Set(allUsers.map(u => u._id));
+    // Get all employees for reference
+    const allEmployees = await ctx.db.query("employees").collect();
+    const employeeClerkUserIds = new Set(allEmployees.map(e => e.clerkUserId));
 
     // Get all residents for reference
     const allResidents = await ctx.db.query("residents").collect();
@@ -346,7 +364,7 @@ export const cleanupOrphanedData = mutation({
       const roles = await ctx.db.query("roles").collect();
       let count = 0;
       for (const role of roles) {
-        if (!userIds.has(role.userId)) {
+        if (!employeeClerkUserIds.has(role.clerkUserId)) {
           await ctx.db.delete(role._id);
           count++;
           deletedCount++;
@@ -360,7 +378,7 @@ export const cleanupOrphanedData = mutation({
       const shifts = await ctx.db.query("shifts").collect();
       let count = 0;
       for (const shift of shifts) {
-        if (!userIds.has(shift.userId) || (shift.kioskId && !kioskIds.has(shift.kioskId))) {
+        if (!employeeClerkUserIds.has(shift.clerkUserId) || (shift.kioskId && !kioskIds.has(shift.kioskId))) {
           await ctx.db.delete(shift._id);
           count++;
           deletedCount++;
@@ -374,7 +392,7 @@ export const cleanupOrphanedData = mutation({
       const residentLogs = await ctx.db.query("resident_logs").collect();
       let count = 0;
       for (const log of residentLogs) {
-        if (!residentIds.has(log.residentId) || (log.authorId && !userIds.has(log.authorId))) {
+        if (!residentIds.has(log.residentId) || (log.authorId && !employeeClerkUserIds.has(log.authorId))) {
           await ctx.db.delete(log._id);
           count++;
           deletedCount++;
@@ -388,7 +406,7 @@ export const cleanupOrphanedData = mutation({
       const auditLogs = await ctx.db.query("audit_logs").collect();
       let count = 0;
       for (const log of auditLogs) {
-        if (log.userId && !userIds.has(log.userId)) {
+        if (log.clerkUserId && !employeeClerkUserIds.has(log.clerkUserId)) {
           await ctx.db.delete(log._id);
           count++;
           deletedCount++;
@@ -402,7 +420,7 @@ export const cleanupOrphanedData = mutation({
       const ispFiles = await ctx.db.query("isp_files").collect();
       let count = 0;
       for (const file of ispFiles) {
-        if (!residentIds.has(file.residentId) || !userIds.has(file.uploadedBy)) {
+        if (!residentIds.has(file.residentId) || !employeeClerkUserIds.has(file.uploadedBy)) {
           await ctx.db.delete(file._id);
           count++;
           deletedCount++;
@@ -416,7 +434,7 @@ export const cleanupOrphanedData = mutation({
       const ispAccessLogs = await ctx.db.query("isp_access_logs").collect();
       let count = 0;
       for (const log of ispAccessLogs) {
-        if (!ispFileIds.has(log.ispFileId) || !residentIds.has(log.residentId) || !userIds.has(log.userId)) {
+        if (!ispFileIds.has(log.ispFileId) || !residentIds.has(log.residentId) || !employeeClerkUserIds.has(log.clerkUserId)) {
           await ctx.db.delete(log._id);
           count++;
           deletedCount++;
@@ -430,7 +448,7 @@ export const cleanupOrphanedData = mutation({
       const ispAcks = await ctx.db.query("isp_acknowledgments").collect();
       let count = 0;
       for (const ack of ispAcks) {
-        if (!residentIds.has(ack.residentId) || !userIds.has(ack.userId) || !ispIds.has(ack.ispId)) {
+        if (!residentIds.has(ack.residentId) || !employeeClerkUserIds.has(ack.clerkUserId) || !ispIds.has(ack.ispId)) {
           await ctx.db.delete(ack._id);
           count++;
           deletedCount++;
@@ -489,7 +507,7 @@ export const cleanupOrphanedData = mutation({
       const alerts = await ctx.db.query("compliance_alerts").collect();
       let count = 0;
       for (const alert of alerts) {
-        if (alert.dismissedBy && !userIds.has(alert.dismissedBy)) {
+        if (alert.dismissedBy && !employeeClerkUserIds.has(alert.dismissedBy)) {
           await ctx.db.patch(alert._id, { dismissedBy: undefined });
           count++;
           deletedCount++;
@@ -504,10 +522,10 @@ export const cleanupOrphanedData = mutation({
       let count = 0;
       for (const kiosk of kiosks) {
         const updates: any = {};
-        if (kiosk.createdBy && !userIds.has(kiosk.createdBy)) {
+        if (kiosk.createdBy && !employeeClerkUserIds.has(kiosk.createdBy)) {
           updates.createdBy = undefined;
         }
-        if (kiosk.registeredBy && !userIds.has(kiosk.registeredBy)) {
+        if (kiosk.registeredBy && !employeeClerkUserIds.has(kiosk.registeredBy)) {
           updates.registeredBy = undefined;
         }
         if (Object.keys(updates).length > 0) {
@@ -519,7 +537,22 @@ export const cleanupOrphanedData = mutation({
       deletionLog.kiosks = count;
     }
 
-    await audit(ctx, "cleanup_orphaned_data", userId, `categories=${args.categories.join(",")},deletedCount=${deletedCount}`);
+    // 13. Clean employees (delete employees without roles)
+    if (args.categories.includes("employees")) {
+      const allRoles = await ctx.db.query("roles").collect();
+      const roleClerkUserIds = new Set(allRoles.map(role => role.clerkUserId));
+      let count = 0;
+      for (const employee of allEmployees) {
+        if (!roleClerkUserIds.has(employee.clerkUserId as string)) {
+          await ctx.db.delete(employee._id);
+          count++;
+          deletedCount++;
+        }
+      }
+      deletionLog.employees = count;
+    }
+
+    await audit(ctx, "cleanup_orphaned_data", clerkUserId, `categories=${args.categories.join(",")},deletedCount=${deletedCount}`);
 
     return {
       success: true,

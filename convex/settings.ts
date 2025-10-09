@@ -1,20 +1,19 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
-import { getAuthUserId } from "@convex-dev/auth/server";
-import { Id } from "./_generated/dataModel";
+// import { Id } from "./_generated/dataModel";
 
 // Helper: Get user role doc
-async function getUserRoleDoc(ctx: any, userId: Id<"users">) {
+async function getUserRoleDoc(ctx: any, clerkUserId: string) {
   return await ctx.db
     .query("roles")
-    .withIndex("by_userId", (q: any) => q.eq("userId", userId))
+    .withIndex("by_clerkUserId", (q: any) => q.eq("clerkUserId", clerkUserId))
     .unique();
 }
 
 // Helper: Audit
-async function audit(ctx: any, event: string, userId: Id<"users"> | null, details?: string) {
+async function audit(ctx: any, event: string, clerkUserId: string | null, details?: string) {
   await ctx.db.insert("audit_logs", {
-    userId: userId ?? undefined,
+    clerkUserId: clerkUserId ?? undefined,
     event,
     timestamp: Date.now(),
     deviceId: "system",
@@ -24,10 +23,10 @@ async function audit(ctx: any, event: string, userId: Id<"users"> | null, detail
 }
 
 // Helper: Check admin access
-async function requireAdmin(ctx: any, userId: Id<"users">) {
-  const userRole = await getUserRoleDoc(ctx, userId);
+async function requireAdmin(ctx: any, clerkUserId: string) {
+  const userRole = await getUserRoleDoc(ctx, clerkUserId);
   if (!userRole || userRole.role !== "admin") {
-    await audit(ctx, "access_denied", userId, "admin_required");
+    await audit(ctx, "access_denied", clerkUserId, "admin_required");
     throw new Error("Admin access required");
   }
   return userRole;
@@ -37,28 +36,29 @@ async function requireAdmin(ctx: any, userId: Id<"users">) {
 export const getAllUsersWithRoles = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
 
-    await requireAdmin(ctx, userId);
+    await requireAdmin(ctx, clerkUserId);
 
-    const users = await ctx.db.query("users").collect();
+    const employees = await ctx.db.query("employees").collect();
     const roles = await ctx.db.query("roles").collect();
     const auditLogs = await ctx.db.query("audit_logs").order("desc").take(1000);
 
-    return users.map(user => {
-      const role = roles.find(r => r.userId === user._id);
-      const lastActivity = auditLogs.find(log => log.userId === user._id);
+    return employees.map(employee => {
+      const role = roles.find(r => r.clerkUserId === employee.clerkUserId);
+      const lastActivity = auditLogs.find(log => log.clerkUserId === employee.clerkUserId);
 
       return {
-        id: user._id,
-        name: user.name || user.email || "Unknown User",
-        email: user.email || "No email",
+        id: employee.clerkUserId,
+        name: employee.name || employee.workEmail || "Unknown User",
+        email: employee.workEmail || "No email",
         role: role?.role || null,
         locations: role?.locations || [],
         lastActive: lastActivity?.timestamp || null,
         recentActivity: auditLogs
-          .filter(log => log.userId === user._id)
+          .filter(log => log.clerkUserId === employee.clerkUserId)
           .slice(0, 5)
           .map(log => ({
             event: log.event,
@@ -73,17 +73,18 @@ export const getAllUsersWithRoles = query({
 // Mutation: Update user role
 export const updateUserRole = mutation({
   args: {
-    userId: v.id("users"),
+    clerkUserId: v.string(),
     role: v.union(v.literal("admin"), v.literal("supervisor"), v.literal("staff")),
     locations: v.array(v.string()),
   },
-  handler: async (ctx, { userId: targetUserId, role: newRole, locations }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+  handler: async (ctx, { clerkUserId: targetClerkUserId, role: newRole, locations }) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
 
-    await requireAdmin(ctx, userId);
+    await requireAdmin(ctx, clerkUserId);
 
-    const existingRole = await getUserRoleDoc(ctx, targetUserId);
+    const existingRole = await getUserRoleDoc(ctx, targetClerkUserId);
 
     if (existingRole) {
       await ctx.db.patch(existingRole._id, {
@@ -92,13 +93,13 @@ export const updateUserRole = mutation({
       });
     } else {
       await ctx.db.insert("roles", {
-        userId: targetUserId,
+        clerkUserId: targetClerkUserId,
         role: newRole,
         locations,
       });
     }
 
-    await audit(ctx, "update_user_role", userId, `targetUserId=${targetUserId},role=${newRole},locations=${locations.join(",")}`);
+    await audit(ctx, "update_user_role", clerkUserId, `targetClerkUserId=${targetClerkUserId},role=${newRole},locations=${locations.join(",")}`);
 
     return true;
   },
@@ -106,19 +107,20 @@ export const updateUserRole = mutation({
 
 // Mutation: Delete user role
 export const deleteUserRole = mutation({
-  args: { userId: v.id("users") },
-  handler: async (ctx, { userId: targetUserId }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+  args: { clerkUserId: v.string() },
+  handler: async (ctx, { clerkUserId: targetClerkUserId }) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
 
-    await requireAdmin(ctx, userId);
+    await requireAdmin(ctx, clerkUserId);
 
-    const existingRole = await getUserRoleDoc(ctx, targetUserId);
+    const existingRole = await getUserRoleDoc(ctx, targetClerkUserId);
     if (existingRole) {
       await ctx.db.delete(existingRole._id);
     }
 
-    await audit(ctx, "delete_user_role", userId, `targetUserId=${targetUserId}`);
+    await audit(ctx, "delete_user_role", clerkUserId, `targetClerkUserId=${targetClerkUserId}`);
 
     return true;
   },
@@ -128,10 +130,11 @@ export const deleteUserRole = mutation({
 export const getKiosks = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
 
-    await requireAdmin(ctx, userId);
+    await requireAdmin(ctx, clerkUserId);
 
     const kiosks = await ctx.db.query("kiosks").collect();
     const auditLogs = await ctx.db.query("audit_logs").order("desc").take(1000);
@@ -154,10 +157,11 @@ export const getKiosks = query({
 export const getLocations = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
 
-    await requireAdmin(ctx, userId);
+    await requireAdmin(ctx, clerkUserId);
 
     const residents = await ctx.db.query("residents").collect();
     const kiosks = await ctx.db.query("kiosks").collect();
@@ -184,10 +188,11 @@ export const registerKiosk = mutation({
     location: v.string(),
   },
   handler: async (ctx, { deviceId, location }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
 
-    await requireAdmin(ctx, userId);
+    await requireAdmin(ctx, clerkUserId);
 
     // Check if device already exists
     const existing = await ctx.db.query("kiosks").withIndex("by_deviceId", (q: any) => q.eq("deviceId", deviceId)).unique();
@@ -199,12 +204,12 @@ export const registerKiosk = mutation({
       location,
       status: "active",
       registeredAt: Date.now(),
-      registeredBy: userId,
+      registeredBy: clerkUserId,
       createdAt: Date.now(),
-      createdBy: userId,
+      createdBy: clerkUserId,
     });
 
-    await audit(ctx, "register_kiosk", userId, `deviceId=${deviceId},location=${location}`);
+    await audit(ctx, "register_kiosk", clerkUserId, `deviceId=${deviceId},location=${location}`);
 
     return true;
   },
@@ -218,14 +223,15 @@ export const updateKiosk = mutation({
     status: v.union(v.literal("active"), v.literal("disabled"), v.literal("retired")),
   },
   handler: async (ctx, { kioskId, location, status }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
 
-    await requireAdmin(ctx, userId);
+    await requireAdmin(ctx, clerkUserId);
 
     await ctx.db.patch(kioskId, { location, status });
 
-    await audit(ctx, "update_kiosk", userId, `kioskId=${kioskId},location=${location},status=${status}`);
+    await audit(ctx, "update_kiosk", clerkUserId, `kioskId=${kioskId},location=${location},status=${status}`);
 
     return true;
   },
@@ -235,14 +241,15 @@ export const updateKiosk = mutation({
 export const deactivateKiosk = mutation({
   args: { kioskId: v.id("kiosks") },
   handler: async (ctx, { kioskId }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
 
-    await requireAdmin(ctx, userId);
+    await requireAdmin(ctx, clerkUserId);
 
     await ctx.db.patch(kioskId, { status: "disabled" });
 
-    await audit(ctx, "deactivate_kiosk", userId, `kioskId=${kioskId}`);
+    await audit(ctx, "deactivate_kiosk", clerkUserId, `kioskId=${kioskId}`);
 
     return true;
   },
@@ -252,14 +259,15 @@ export const deactivateKiosk = mutation({
 export const deleteKiosk = mutation({
   args: { kioskId: v.id("kiosks") },
   handler: async (ctx, { kioskId }) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
 
-    await requireAdmin(ctx, userId);
+    await requireAdmin(ctx, clerkUserId);
 
     await ctx.db.delete(kioskId);
 
-    await audit(ctx, "delete_kiosk", userId, `kioskId=${kioskId}`);
+    await audit(ctx, "delete_kiosk", clerkUserId, `kioskId=${kioskId}`);
 
     return true;
   },
@@ -275,16 +283,17 @@ export const getAuditLogs = query({
     dateTo: v.optional(v.string()),
   },
   handler: async (ctx, filters) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
 
-    await requireAdmin(ctx, userId);
+    await requireAdmin(ctx, clerkUserId);
 
     const logs = await ctx.db.query("audit_logs").order("desc").take(1000);
-    const users = await ctx.db.query("users").collect();
+    const employees = await ctx.db.query("employees").collect();
 
     return logs.map(log => {
-      const actor = log.userId ? users.find(u => u._id === log.userId) : null;
+      const actor = log.clerkUserId ? employees.find(e => e.clerkUserId === log.clerkUserId) : null;
 
       // Determine object type from details (PHI-free)
       let objectType = "System";
@@ -296,8 +305,8 @@ export const getAuditLogs = query({
       return {
         id: log._id,
         timestamp: log.timestamp,
-        actorId: log.userId || "system",
-        actorName: actor ? (actor.name || actor.email || "Unknown User") : "System",
+        actorId: log.clerkUserId || "system",
+        actorName: actor ? (actor.name || actor.workEmail || "Unknown User") : "System",
         event: log.event,
         location: log.location || "System",
         objectType,
@@ -311,19 +320,20 @@ export const getAuditLogs = query({
 export const getAuditActors = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
 
-    await requireAdmin(ctx, userId);
+    await requireAdmin(ctx, clerkUserId);
 
-    const users = await ctx.db.query("users").collect();
+    const employees = await ctx.db.query("employees").collect();
     const roles = await ctx.db.query("roles").collect();
 
-    return users.map(user => {
-      const role = roles.find(r => r.userId === user._id);
+    return employees.map(employee => {
+      const role = roles.find(r => r.clerkUserId === employee.clerkUserId);
       return {
-        id: user._id,
-        name: user.name || user.email || "Unknown User",
+        id: employee.clerkUserId,
+        name: employee.name || employee.workEmail || "Unknown User",
         role: role?.role || "No role",
       };
     });
@@ -334,10 +344,11 @@ export const getAuditActors = query({
 export const getAuditActions = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
 
-    await requireAdmin(ctx, userId);
+    await requireAdmin(ctx, clerkUserId);
 
     const logs = await ctx.db.query("audit_logs").collect();
     const actions = [...new Set(logs.map(log => log.event))];
@@ -350,10 +361,11 @@ export const getAuditActions = query({
 export const getAuditLocations = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
 
-    await requireAdmin(ctx, userId);
+    await requireAdmin(ctx, clerkUserId);
 
     const logs = await ctx.db.query("audit_logs").collect();
     const locations = [...new Set(logs.map(log => log.location).filter(Boolean))];
@@ -366,10 +378,11 @@ export const getAuditLocations = query({
 export const getAppSettings = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
 
-    await requireAdmin(ctx, userId);
+    await requireAdmin(ctx, clerkUserId);
 
     const config = await ctx.db.query("config").first();
 
@@ -395,12 +408,13 @@ export const updateAppSettings = mutation({
     selfieEnforced: v.optional(v.boolean()),
   },
   handler: async (ctx, settings) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
 
-    await requireAdmin(ctx, userId);
+    await requireAdmin(ctx, clerkUserId);
 
-    let config = await ctx.db.query("config").first();
+    const config = await ctx.db.query("config").first();
 
     if (config) {
       // Update existing config
@@ -425,7 +439,7 @@ export const updateAppSettings = mutation({
       });
     }
 
-    await audit(ctx, "update_app_settings", userId, `settings=${Object.keys(settings).join(",")}`);
+    await audit(ctx, "update_app_settings", clerkUserId, `settings=${Object.keys(settings).join(",")}`);
 
     return true;
   },
@@ -435,14 +449,14 @@ export const updateAppSettings = mutation({
 export const getUserRole = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return null;
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return null;
+    const clerkUserId = identity.subject;
     
-    const role = await getUserRoleDoc(ctx, userId);
+    const role = await getUserRoleDoc(ctx, clerkUserId);
     return {
       role: role?.role || null,
       locations: role?.locations || [],
-      isKiosk: false, // Placeholder for kiosk detection
     };
   },
 });

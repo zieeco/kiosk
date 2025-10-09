@@ -1,20 +1,19 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
-import { getAuthUserId } from "@convex-dev/auth/server";
-import { Id } from "./_generated/dataModel";
+// import { Id } from "./_generated/dataModel";
 
 // Helper: Get user role doc
-async function getUserRoleDoc(ctx: any, userId: Id<"users">) {
+async function getUserRoleDoc(ctx: any, clerkUserId: string) {
   return await ctx.db
     .query("roles")
-    .withIndex("by_userId", (q: any) => q.eq("userId", userId))
+    .withIndex("by_clerkUserId", (q: any) => q.eq("clerkUserId", clerkUserId))
     .unique();
 }
 
 // Helper: Audit
-async function audit(ctx: any, event: string, userId: Id<"users"> | null, details?: string) {
+async function audit(ctx: any, event: string, clerkUserId: string | null, details?: string) {
   await ctx.db.insert("audit_logs", {
-    userId: userId ?? undefined,
+    clerkUserId: clerkUserId ?? undefined,
     event,
     timestamp: Date.now(),
     deviceId: "web",
@@ -24,10 +23,10 @@ async function audit(ctx: any, event: string, userId: Id<"users"> | null, detail
 }
 
 // Helper: Check supervisor access
-async function requireSupervisorAccess(ctx: any, userId: Id<"users">) {
-  const userRole = await getUserRoleDoc(ctx, userId);
+async function requireSupervisorAccess(ctx: any, clerkUserId: string) {
+  const userRole = await getUserRoleDoc(ctx, clerkUserId);
   if (!userRole || !["admin", "supervisor"].includes(userRole.role)) {
-    await audit(ctx, "access_denied", userId, "supervisor_access_required");
+    await audit(ctx, "access_denied", clerkUserId, "supervisor_access_required");
     throw new Error("Supervisor access required");
   }
   return userRole;
@@ -48,10 +47,11 @@ function generateNeutralId(residentId: string): string {
 export const getTeamMembers = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    const userRole = await requireSupervisorAccess(ctx, userId);
+    const userRole = await requireSupervisorAccess(ctx, clerkUserId);
     
     // Get all staff roles in supervisor's locations
     const allRoles = await ctx.db.query("roles").collect();
@@ -63,16 +63,19 @@ export const getTeamMembers = query({
     // Get user details and shift status for each team member
     const teamMembers = await Promise.all(
       teamRoles.map(async (role) => {
-        const user = await ctx.db.get(role.userId);
-        if (!user) return null;
+        const employee = await ctx.db
+          .query("employees")
+          .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", role.clerkUserId))
+          .first();
+        if (!employee) return null;
         
         // Check if currently clocked in - need to add shifts table to schema
         const isCurrentlyClocked = false; // Placeholder
         const lastClockIn = null; // Placeholder
         
         return {
-          id: role.userId,
-          name: user.name || "Unknown",
+          id: role.clerkUserId,
+          name: employee.name || "Unknown",
           role: role.role,
           locations: role.locations ? role.locations.filter(loc => userRole.locations.includes(loc)) : [],
           isCurrentlyClocked,
@@ -89,10 +92,11 @@ export const getTeamMembers = query({
 export const getPendingTimeExceptions = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    await requireSupervisorAccess(ctx, userId);
+    await requireSupervisorAccess(ctx, clerkUserId);
     
     // For now, return empty array - time exceptions would be implemented
     // based on shift data analysis
@@ -104,13 +108,14 @@ export const getPendingTimeExceptions = query({
 export const approveTimeException = mutation({
   args: { exceptionId: v.string() },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    await requireSupervisorAccess(ctx, userId);
+    await requireSupervisorAccess(ctx, clerkUserId);
     
     // Implementation would update shift record with approval
-    await audit(ctx, "approve_time_exception", userId, `exceptionId=${args.exceptionId}`);
+    await audit(ctx, "approve_time_exception", clerkUserId, `exceptionId=${args.exceptionId}`);
     
     return true;
   },
@@ -123,13 +128,14 @@ export const denyTimeException = mutation({
     reason: v.string(),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    await requireSupervisorAccess(ctx, userId);
+    await requireSupervisorAccess(ctx, clerkUserId);
     
     // Implementation would update shift record with denial
-    await audit(ctx, "deny_time_exception", userId, `exceptionId=${args.exceptionId},reason=${args.reason}`);
+    await audit(ctx, "deny_time_exception", clerkUserId, `exceptionId=${args.exceptionId},reason=${args.reason}`);
     
     return true;
   },
@@ -139,10 +145,11 @@ export const denyTimeException = mutation({
 export const getLocationIsps = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    const userRole = await requireSupervisorAccess(ctx, userId);
+    const userRole = await requireSupervisorAccess(ctx, clerkUserId);
     
     // Get residents in supervisor's locations
     // Admin can see all residents, supervisors see only their assigned locations
@@ -182,10 +189,11 @@ export const getLocationIsps = query({
 export const getIspAcknowledgments = query({
   args: {},
   handler: async (ctx) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    const userRole = await requireSupervisorAccess(ctx, userId);
+    const userRole = await requireSupervisorAccess(ctx, clerkUserId);
     
     // Get published ISPs for residents in supervisor's locations
     // Admin can see all residents, supervisors see only their assigned locations
@@ -212,13 +220,16 @@ export const getIspAcknowledgments = query({
         );
         
         for (const staffRole of relevantStaff) {
-          const user = await ctx.db.get(staffRole.userId);
-          if (!user) continue;
+          const employee = await ctx.db
+            .query("employees")
+            .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", staffRole.clerkUserId))
+            .first();
+          if (!employee) continue;
           
           const acknowledgment = await ctx.db
             .query("isp_acknowledgments")
             .withIndex("by_resident_and_user", (q) => 
-              q.eq("residentId", resident._id).eq("userId", staffRole.userId)
+              q.eq("residentId", resident._id).eq("clerkUserId", staffRole.clerkUserId)
             )
             .filter((q) => q.eq(q.field("ispId"), isp._id))
             .first();
@@ -228,8 +239,8 @@ export const getIspAcknowledgments = query({
             ispVersion: isp.version || 1,
             residentNeutralId: generateNeutralId(resident._id),
             location: resident.location,
-            userId: staffRole.userId,
-            userName: user.name,
+            clerkUserId: staffRole.clerkUserId,
+            userName: employee.name,
             acknowledgedAt: acknowledgment?.acknowledgedAt,
           });
         }
@@ -253,17 +264,18 @@ export const createIsp = mutation({
     goals: v.array(v.string()),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    const userRole = await requireSupervisorAccess(ctx, userId);
+    const userRole = await requireSupervisorAccess(ctx, clerkUserId);
     
     const resident = await ctx.db.get(args.residentId);
     if (!resident) throw new Error("Resident not found");
     
     // Check location access
     if (!userRole.locations.includes(resident.location)) {
-      await audit(ctx, "access_denied", userId, `resident_access_denied=${args.residentId}`);
+      await audit(ctx, "access_denied", clerkUserId, `resident_access_denied=${args.residentId}`);
       throw new Error("Access denied to this resident");
     }
     
@@ -286,7 +298,7 @@ export const createIsp = mutation({
       dueAt: Date.now() + 365 * 24 * 60 * 60 * 1000, // 1 year from now
     });
     
-    await audit(ctx, "create_isp", userId, `residentId=${args.residentId},ispId=${ispId},version=${version}`);
+    await audit(ctx, "create_isp", clerkUserId, `residentId=${args.residentId},ispId=${ispId},version=${version}`);
     
     return { ispId };
   },
@@ -296,10 +308,11 @@ export const createIsp = mutation({
 export const publishIsp = mutation({
   args: { ispId: v.id("isp") },
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
     
-    const userRole = await requireSupervisorAccess(ctx, userId);
+    const userRole = await requireSupervisorAccess(ctx, clerkUserId);
     
     const isp = await ctx.db.get(args.ispId);
     if (!isp) throw new Error("ISP not found");
@@ -309,7 +322,7 @@ export const publishIsp = mutation({
     
     // Check location access
     if (!userRole.locations.includes(resident.location)) {
-      await audit(ctx, "access_denied", userId, `resident_access_denied=${isp.residentId}`);
+      await audit(ctx, "access_denied", clerkUserId, `resident_access_denied=${isp.residentId}`);
       throw new Error("Access denied to this resident");
     }
     
@@ -321,7 +334,7 @@ export const publishIsp = mutation({
       published: true,
     });
     
-    await audit(ctx, "publish_isp", userId, `ispId=${args.ispId},residentId=${isp.residentId}`);
+    await audit(ctx, "publish_isp", clerkUserId, `ispId=${args.ispId},residentId=${isp.residentId}`);
     
     return true;
   },
