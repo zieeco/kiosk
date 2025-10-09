@@ -1,18 +1,14 @@
 "use client";
-import { useAuthActions } from "@convex-dev/auth/react";
-import { useConvexAuth, useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation } from "convex/react";
 import { api } from "../convex/_generated/api";
 import { toast } from "sonner";
+import { useClerk } from "@clerk/clerk-react";
 
+// This is a test comment to force re-evaluation
 export function SignOutButton() {
-  const { isAuthenticated } = useConvexAuth();
-  const { signOut } = useAuthActions();
+  const { signOut: clerkSignOut } = useClerk();
   const currentShift = useQuery(api.care.getCurrentShift);
   const clockOut = useMutation(api.care.clockOut);
-
-  if (!isAuthenticated) {
-    return null;
-  }
 
   const handleSignOut = async () => {
     if (currentShift) {
@@ -28,13 +24,13 @@ export function SignOutButton() {
         return;
       }
     }
-    void signOut();
+    void clerkSignOut();
   };
 
   return (
     <button
       className="px-4 py-2 rounded bg-white text-secondary border border-gray-200 font-semibold hover:bg-gray-50 hover:text-secondary-hover transition-colors shadow-sm hover:shadow"
-      onClick={handleSignOut}
+      onClick={() => void handleSignOut()}
     >
       Sign out
     </button>
