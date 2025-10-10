@@ -127,6 +127,38 @@ export const sendEmployeeInviteEmail = action({
 	},
 });
 
+// Query: Get employee invite link details
+export const getEmployeeInviteLink = query({
+  args: {
+    employeeId: v.id("employees"),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const clerkUserId = identity.subject;
+
+    await requireAdmin(ctx, clerkUserId); // Only admin can view invite links
+
+    const employee = await ctx.db.get(args.employeeId);
+    if (!employee) {
+      return null;
+    }
+
+    if (!employee.inviteToken || !employee.inviteExpiresAt) {
+      return null; // No active invite for this employee
+    }
+
+    // Reconstruct the invite URL
+    const baseUrl = 'https://fleet-bobcat-14.convex.app'; // This should ideally come from an environment variable
+    const inviteUrl = `${baseUrl}/?invite=${employee.inviteToken}`;
+
+    return {
+      url: inviteUrl,
+      expiresAt: employee.inviteExpiresAt,
+    };
+  },
+});
+
 // Onboard new employee (admin only)
 export const onboardEmployee = mutation({
 	args: {

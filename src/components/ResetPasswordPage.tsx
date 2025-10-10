@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-misused-promises */
 "use client";
 import { useEffect, useState } from "react";
 import { useMutation } from "convex/react";

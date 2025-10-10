@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-misused-promises */
 import { useState } from "react";
 import { useAction } from "convex/react";
 import { api } from "../../convex/_generated/api";

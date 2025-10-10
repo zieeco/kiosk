@@ -49,11 +49,17 @@ const applicationTables = {
 		updatedAt: v.optional(v.number()),
 		clerkUserId: v.optional(v.string()), // Link to Clerk user
 		assignedDeviceId: v.optional(v.string()), // New field for device restriction
+		invitedAt: v.optional(v.number()), // Add the missing invitedAt field
+		invitedBy: v.optional(v.string()), // Add invitedBy field
+		hasAcceptedInvite: v.optional(v.boolean()), // Add hasAcceptedInvite field
+		inviteToken: v.optional(v.string()), // Add inviteToken field
+		inviteExpiresAt: v.optional(v.number()), // Add inviteExpiresAt field
 	})
 		.index('by_workEmail', ['workEmail'])
 		.index('by_email', ['email'])
 		.index('by_clerkUserId', ['clerkUserId'])
-		.index('by_assignedDeviceId', ['assignedDeviceId']), // New index for device restriction
+		.index('by_assignedDeviceId', ['assignedDeviceId']) // New index for device restriction
+		.index('by_inviteToken', ['inviteToken']), // Add index for inviteToken
 
 	roles: defineTable({
 		clerkUserId: v.string(), // Changed from userId to clerkUserId
@@ -348,6 +354,17 @@ const applicationTables = {
 		.index('by_deviceId', ['deviceId'])
 		.index('by_clerkUserId', ['clerkUserId'])
 		.index('by_locationId', ['locationId']),
+
+    // Add the missing locations table
+    locations: defineTable({
+        name: v.string(),
+        address: v.optional(v.string()),
+        capacity: v.optional(v.number()),
+        status: v.optional(v.union(v.literal("active"), v.literal("inactive"), v.literal("maintenance"), v.literal("disabled"), v.literal("retired"))),
+        createdBy: v.optional(v.string()),
+        createdAt: v.optional(v.number()),
+        updatedAt: v.optional(v.number()),
+    }).index('by_name', ['name']), // Add an index for querying by name
 };
 
 export default defineSchema(applicationTables);

@@ -1,6 +1,6 @@
 import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
-import { api } from "./_generated/api"; // Import api to reference internal actions
+import { api, internal } from "./_generated/api"; // Import api and internal to reference internal actions
 
 const http = httpRouter();
 
@@ -15,12 +15,12 @@ http.route({
     const signature = request.headers.get("svix-signature")!;
 
     // Call the internal action to handle the webhook
-    await (ctx as any).runAction(api.auth.loggedInUser, {
+    await (ctx as any).runAction(internal.clerk.handleClerkWebhook, { // Corrected to internal.clerk.handleClerkWebhook
       payload: payloadString,
       headers: {
-        "svix-id": header,
-        "svix-timestamp": timestamp,
-        "svix-signature": signature,
+        svix_id: header, // Changed from "svix-id" to svix_id
+        svix_timestamp: timestamp, // Changed from "svix-timestamp" to svix_timestamp
+        svix_signature: signature, // Changed from "svix-signature" to svix_signature
       },
     });
 

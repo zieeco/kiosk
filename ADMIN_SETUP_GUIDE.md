@@ -1,111 +1,77 @@
 # Ezer - Administrator Setup Guide
 
-## Initial Setup for Client Handover
+## Initial Administrator Setup with Clerk
 
-When you first deploy Ezer to a new environment, you'll need to create the first administrator account. This guide explains the process.
+When you first deploy Ezer to a new environment, you'll need to set up the initial administrator account and configure Clerk. This guide explains the process.
 
 ---
 
-## Method 1: Automatic Bootstrap Screen (Recommended)
+## Administrator Setup
 
-### What Happens
+### Overview
 
-When you first access the application and **no administrator exists**, you'll automatically see a "Create First Admin" screen.
+The application exclusively uses Clerk for user authentication. The first administrator will be created directly through Clerk's sign-up flow, and all subsequent employee accounts will be managed by the administrator within the application.
 
 ### Steps
 
-1. **Access the Application**
-   - Open your browser and navigate to your Ezer deployment URL
-   - Example: `https://fleet-bobcat-14.convex.app`
+1.  **Access the Application**
+    *   Open your browser and navigate to your Ezer deployment URL.
+    *   Example: `https://fleet-bobcat-14.convex.app`
 
-2. **Fill in Admin Details**
-   - **Full Name**: Enter the administrator's full name
-   - **Email Address**: Enter a valid email address (this will be the login username)
-   - **Password**: Create a strong password (minimum 8 characters)
-   - **Confirm Password**: Re-enter the password
+2.  **Sign Up as First Administrator**
+    *   You will be redirected to Clerk's sign-up page.
+    *   Follow the prompts to create your administrator account using your email address and a strong password.
+    *   Complete any verification steps required by Clerk (e.g., email verification).
 
-3. **Create Account**
-   - Click "Create Admin Account"
-   - Wait for confirmation message
-   - The page will automatically reload
+3.  **Complete Admin Profile (if prompted)**
+    *   After signing up with Clerk, you might be redirected to an application-specific page to complete your admin profile (e.g., entering your full name, if not captured by Clerk).
 
-4. **Sign In**
-   - Use the email and password you just created to sign in
-   - You now have full administrator access
+4.  **Sign In**
+    *   Once your admin account is created and verified, use your Clerk credentials to sign in.
+    *   You now have full administrator access.
 
 ### Security Notes
 
-- ✅ This bootstrap screen **only appears when no admin exists**
-- ✅ Once an admin is created, this screen is **permanently disabled**
-- ✅ All subsequent users must be invited by an existing administrator
-- ✅ Passwords are securely hashed using bcrypt
+*   ✅ Clerk handles all user authentication securely, including password hashing and multi-factor authentication options.
+*   ✅ All subsequent employees will be invited and managed by an existing administrator through the Admin Portal.
+*   ✅ Employee logins are restricted to company-assigned kiosk devices. Unauthorized device access will be blocked.
 
----
-
-## Method 2: Manual Database Setup (Advanced)
-
-If you need to create an admin account manually through the Convex dashboard:
-
-### Steps
-
-1. **Open Convex Dashboard**
-   - Go to https://dashboard.convex.dev
-   - Select your deployment
-
-2. **Open Functions Tab**
-   - Click on "Functions" in the left sidebar
-
-3. **Run Bootstrap Function**
-   - Find and run `auth:bootstrapFirstAdmin`
-   - Provide the following arguments:
-     ```json
-     {
-       "name": "Admin Name",
-       "email": "admin@example.com",
-       "password": "SecurePassword123"
-     }
-     ```
-
-4. **Verify Creation**
-   - Check the "Data" tab
-   - Look in the `users` and `roles` tables
-   - Confirm the admin user exists
-
----
 
 ## After Initial Setup
 
-Once the first administrator is created:
+Once the first administrator is created and Clerk is configured:
 
 ### 1. Sign In
-- Use the email and password created during bootstrap
-- You'll be directed to the Admin Portal
+*   Use your Clerk credentials to sign in.
+*   You'll be directed to the Admin Portal.
 
 ### 2. Configure Locations
-- Go to **Settings → Locations**
-- Add your care facility locations
-- Example: "Main Building", "West Wing", etc.
+*   Go to **Settings → Locations**.
+*   Add your care facility locations.
+*   Example: "Main Building", "West Wing", etc.
 
 ### 3. Invite Staff
-- Go to **Employees** workspace
-- Click "Invite Employee"
-- Enter employee details:
-  - Name
-  - Work email
-  - Role (Admin, Supervisor, or Staff)
-  - Assigned locations
-- Employee will receive an invitation email
+*   Go to **Employees** workspace.
+*   Click "Invite Employee".
+*   Enter employee details:
+    *   Name
+    *   Work email
+    *   Role (Admin, Supervisor, or Staff)
+    *   Assigned locations
+    *   Set a temporary password for the employee.
+*   The employee will receive an email notification with their login credentials (email and temporary password) and instructions.
+*   **Important**: Employees can *only* log in from company-assigned kiosk devices. Any attempt to log in from an unauthorized device (e.g., personal phone, laptop) will be blocked immediately. Upon successful login from an assigned device, they will be redirected to their employee dashboard.
 
 ### 4. Set Up Residents
-- Go to **Residents** workspace
-- Add resident profiles
-- Upload ISP documents
-- Configure fire evacuation plans
+*   Go to **Residents** workspace.
+*   Add resident profiles.
+*   Upload ISP documents.
+*   Configure fire evacuation plans.
 
-### 5. Configure Kiosks (Optional)
-- Go to **Settings → Kiosk Management**
-- Generate pairing tokens for physical kiosk devices
-- Assign kiosks to specific locations
+### 5. Configure Kiosks (Mandatory for Employee Login)
+*   Go to **Settings → Kiosk Management**.
+*   Register and assign physical kiosk devices to specific locations.
+*   Ensure each employee's assigned device is properly configured and authorized in the system. Employees will only be able to log in from these registered devices.
 
 ---
 
@@ -113,43 +79,41 @@ Once the first administrator is created:
 
 ### "Admin already exists" Error
 
-**Problem**: You see this error when trying to create an admin
+**Problem**: You encounter an error indicating the admin account already exists during Clerk sign-up.
 
-**Solution**: An administrator already exists. Use the sign-in form instead.
+**Solution**: An administrator account with that email already exists in Clerk. Please use the sign-in form instead, or try a different email address for a new admin.
 
 ### Forgot Admin Password
 
-**Problem**: Lost access to the admin account
-
-**Solution**: 
-1. Contact Convex support or your technical team
-2. They can reset the password through the database
-3. Or create a new admin account if necessary
-
-### Bootstrap Screen Not Appearing
-
-**Problem**: The bootstrap screen doesn't show
+**Problem**: Lost access to your admin account.
 
 **Solution**:
-1. Check if an admin already exists in the database
-2. Clear browser cache and reload
-3. Verify deployment is running correctly
+1.  Use Clerk's "Forgot Password" flow on the sign-in page to reset your password.
+2.  If you encounter persistent issues, contact your technical team for assistance with Clerk user management.
+
+### Unauthorized Device Access
+
+**Problem**: An employee is unable to log in from a device.
+
+**Solution**:
+1.  Verify that the device is a company-assigned kiosk and has been properly registered and authorized in **Settings → Kiosk Management**.
+2.  Ensure the employee is attempting to log in from the *assigned* device.
+3.  Check the device's network connection.
 
 ---
 
 ## Security Best Practices
 
 ### Password Requirements
-- ✅ Minimum 8 characters
-- ✅ Use a mix of uppercase, lowercase, numbers, and symbols
-- ✅ Avoid common words or patterns
-- ✅ Use a password manager
+*   ✅ Clerk enforces strong password policies. Adhere to Clerk's recommendations for minimum length, complexity, and rotation.
+*   ✅ Encourage the use of password managers.
 
 ### Account Security
-- 🔒 Never share admin credentials
-- 🔒 Use unique passwords for each admin
-- 🔒 Regularly review user access in the audit logs
-- 🔒 Remove access for terminated employees immediately
+*   🔒 Clerk handles secure storage and management of user credentials.
+*   🔒 Never share admin or employee credentials.
+*   🔒 Employee accounts are strictly tied to company-assigned kiosk devices. Unauthorized device access is automatically blocked.
+*   🔒 Regularly review user access and device authorizations in the Admin Portal.
+*   🔒 Immediately revoke access for terminated employees and de-authorize their assigned devices.
 
 ### Audit Trail
 - All admin actions are logged in `audit_logs` table
@@ -171,12 +135,12 @@ For technical support or questions:
 
 | Task | Location |
 |------|----------|
-| Create first admin | Automatic on first visit |
-| Sign in | Main page (after admin exists) |
-| Invite employees | Admin Portal → Employees |
+| Create first admin | Clerk Sign-up Page |
+| Sign in | Clerk Sign-in Page |
+| Invite employees | Admin Portal → Employees (Clerk-managed) |
 | Add residents | Admin Portal → Residents |
 | Configure locations | Admin Portal → Settings → Locations |
-| Set up kiosks | Admin Portal → Settings → Kiosk Management |
+| Set up kiosks | Admin Portal → Settings → Kiosk Management (Mandatory for employee login) |
 | View audit logs | Admin Portal → Settings → System |
 
 ---

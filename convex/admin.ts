@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { Doc } from "./_generated/dataModel"; // Import Doc type
 // import { getAuthUserId } from "@convex-dev/auth/server"; // Removed as per plan
 
 // Check if any admin exists in the system
@@ -120,7 +121,7 @@ export const syncLocationsFromStrings = mutation({
     }
 
     // Get existing locations
-    const existingLocations = await ctx.db.query("locations").collect();
+    const existingLocations: Doc<"locations">[] = await ctx.db.query("locations").collect();
     const existingNames = new Set(existingLocations.map((l) => l.name));
 
     // Create new locations that don't exist
@@ -241,7 +242,7 @@ export const deleteLocation = mutation({
 
     const residentsInLocation = await ctx.db
       .query("residents")
-      .withIndex("by_location", (q) => q.eq("location", location.name))
+      .withIndex("by_location", (q) => q.eq("location", (location as Doc<"locations">).name))
       .first();
 
     if (residentsInLocation) {

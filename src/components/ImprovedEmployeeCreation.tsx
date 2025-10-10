@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useMutation } from "convex/react";
+import { useMutation, useQuery } from "convex/react"; // Import useQuery
 import { api } from "../../convex/_generated/api";
 import { toast } from "sonner";
 
@@ -14,9 +14,11 @@ export default function ImprovedEmployeeCreation({ onSuccess, onCancel, availabl
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<"admin" | "supervisor" | "staff">("staff");
   const [selectedLocations, setSelectedLocations] = useState<string[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string | undefined>(undefined); // New state for assigned device
   const [submitting, setSubmitting] = useState(false);
 
-  const createWithInvite = useMutation(api.employeesImproved.createEmployeeWithInvite);
+  const createEmployee = useMutation(api.employees.createEmployee); // Use the updated createEmployee action
+  const availableDevices = useQuery(api.kiosk.listAvailableKioskDevices); // Fetch available devices
 
   function toggleLocation(location: string) {
     setSelectedLocations(prev =>
@@ -39,15 +41,21 @@ export default function ImprovedEmployeeCreation({ onSuccess, onCancel, availabl
       return;
     }
 
+    if (!selectedDeviceId) {
+      toast.error("Please assign a device to the employee");
+      return;
+    }
+
     setSubmitting(true);
     try {
-      const result = await createWithInvite({
+      const result = await createEmployee({
         name: name.trim(),
         email: email.trim().toLowerCase(),
         role,
         locations: selectedLocations,
+        assignedDeviceId: selectedDeviceId, // Pass the assigned device ID
       });
-      toast.success(result.message || "Invite sent successfully!");
+      toast.success(result.message || "Employee created successfully! Credentials sent via email.");
       onSuccess();
     } catch (err: any) {
       toast.error(err.message || "Failed to create employee");
@@ -62,19 +70,19 @@ export default function ImprovedEmployeeCreation({ onSuccess, onCancel, availabl
         <div className="p-6 border-b border-gray-200">
           <h2 className="text-2xl font-bold">Add New Employee</h2>
           <p className="text-gray-600 text-sm mt-1">
-            Send an email invitation for secure onboarding
+            Create a new employee account and assign a company device.
           </p>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-6">
-          {/* Info: Email invite only */}
+        <form onSubmit={(e) => void handleSubmit(e)} className="p-6 space-y-6">
+          {/* Info: Employee Creation Flow */}
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
             <div className="flex items-start gap-3">
               <span className="text-2xl">📧</span>
               <div>
-                <p className="font-medium text-blue-900">Email Invite</p>
+                <p className="font-medium text-blue-900">Employee Onboarding</p>
                 <p className="text-sm text-blue-700">
-                  Employee will receive an email invitation to set their own password securely.
+                  The employee will receive an email with their login credentials (email and a temporary password). They can only log in from the assigned company device.
                 </p>
               </div>
             </div>
@@ -134,6 +142,30 @@ export default function ImprovedEmployeeCreation({ onSuccess, onCancel, availabl
             </select>
           </div>
 
+          {/* Assigned Device */}
+          <div>
+            <label htmlFor="assignedDevice" className="block text-sm font-medium text-gray-700 mb-2">
+              Assign Company Kiosk Device *
+            </label>
+            <select
+              id="assignedDevice"
+              value={selectedDeviceId || ""}
+              onChange={(e) => setSelectedDeviceId(e.target.value || undefined)}
+              className="w-full rounded-lg border border-gray-300 px-3.5 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              required
+              disabled={submitting || !availableDevices}
+            >
+              <option value="">Select a device</option>
+              {availableDevices?.map((device) => (
+                <option key={device.deviceId} value={device.deviceId}>
+                  {device.deviceLabel} ({device.location})
+                </option>
+              ))}
+            </select>
+            {!availableDevices && <p className="text-sm text-gray-500 mt-1">Loading available devices...</p>}
+            {availableDevices?.length === 0 && <p className="text-sm text-red-500 mt-1">No active kiosk devices found. Please register a kiosk first.</p>}
+          </div>
+
           {/* Locations */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -173,10 +205,10 @@ export default function ImprovedEmployeeCreation({ onSuccess, onCancel, availabl
             </button>
             <button
               type="submit"
-              disabled={submitting}
+              disabled={submitting || !selectedDeviceId || availableDevices?.length === 0}
               className="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
             >
-              {submitting ? "Sending Invite..." : "Send Invite"}
+              {submitting ? "Creating Employee..." : "Create Employee"}
             </button>
           </div>
         </form>

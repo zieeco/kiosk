@@ -15,7 +15,7 @@ http.route({
     if (!employeeId) return new Response("Missing employeeId", { status: 400 });
 
     // Call the Convex query
-    const result = await ctx.runQuery(api.employees.getInviteLink, {
+    const result = await ctx.runQuery(api.people.getEmployeeInviteLink, {
       employeeId: employeeId as Id<"employees">,
     });
     if (!result) return new Response("No invite link", { status: 404 });

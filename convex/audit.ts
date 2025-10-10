@@ -1,7 +1,7 @@
-import { mutation } from "./_generated/server";
+import { internalMutation } from "./_generated/server"; // Changed to internalMutation
 import { v } from "convex/values";
 
-export const log = mutation({
+export const log = internalMutation({ // Changed to internalMutation
   args: {
     clerkUserId: v.optional(v.string()),
     event: v.string(),
