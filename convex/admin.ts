@@ -62,7 +62,7 @@ export const createFirstAdmin = mutation({
 				role: 'admin',
 				locations: [],
 				employmentStatus: 'active',
-				assignedDeviceId: null, // Admin can login from anywhere
+				assignedDeviceId: undefined, // Admin can login from anywhere (changed from null to undefined)
 				createdAt: Date.now(),
 			});
 		}
@@ -105,7 +105,7 @@ export const forceCreateAdmin = mutation({
 			console.log('📝 Updating existing employee to admin');
 			await ctx.db.patch(existingEmployee._id, {
 				role: 'admin',
-				assignedDeviceId: null, // Allow login from anywhere
+				assignedDeviceId: undefined, // Allow login from anywhere (changed from null to undefined)
 			});
 		} else {
 			console.log('📝 Creating new employee record as admin');
@@ -117,7 +117,7 @@ export const forceCreateAdmin = mutation({
 				role: 'admin',
 				locations: [],
 				employmentStatus: 'active',
-				assignedDeviceId: null, // Allow login from anywhere
+				assignedDeviceId: undefined, // Allow login from anywhere (changed from null to undefined)
 				createdAt: Date.now(),
 			});
 		}
@@ -266,7 +266,7 @@ export const listKioskDevices = query({
 		if (args.location) {
 			kiosks = await ctx.db
 				.query('kiosks')
-				.withIndex('by_location', (q) => q.eq('location', args.location))
+				.withIndex('by_location', (q) => q.eq('location', args.location!)) // Assert args.location as string
 				.collect();
 		} else {
 			kiosks = await ctx.db.query('kiosks').collect();
