@@ -487,17 +487,22 @@ export const checkDeviceAuthorization = query({
 			.unique();
 
 		if (!employee) {
+			console.log('❌ Employee not found');
 			return {isAuthorized: false, reason: 'Employee not found'};
 		}
 
-		if (
-			employee.assignedDeviceId &&
-			employee.assignedDeviceId === args.deviceId
-		) {
+		// IF NO DEVICE ASSIGNED (undefined), ALLOW ACCESS (for admins/flexible users)
+		if (!employee.assignedDeviceId) {
+			console.log('✅ No device restriction - access granted');
 			return {isAuthorized: true};
-		} else if (!employee.assignedDeviceId) {
-			return {isAuthorized: false, reason: 'No device assigned to employee'};
+		}
+
+		// IF DEVICE IS ASSIGNED, CHECK IF IT MATCHES
+		if (employee.assignedDeviceId === args.deviceId) {
+			console.log('✅ Device matches - access granted');
+			return {isAuthorized: true};
 		} else {
+			console.log('❌ Device mismatch - access denied');
 			return {
 				isAuthorized: false,
 				reason: 'Device not assigned to this employee',
