@@ -1,5 +1,8 @@
+/* eslint-disable @typescript-eslint/no-misused-promises */
+/* eslint-disable @typescript-eslint/no-floating-promises */
 import React, { useState, useEffect } from "react";
 import { useMutation, useQuery } from "convex/react";
+import {useUser} from '@clerk/clerk-react';
 import { api } from "../convex/_generated/api";
 import { Id } from "../convex/_generated/dataModel";
 import SelfieCapture from "./components/SelfieCapture";
@@ -41,7 +44,11 @@ export default function KioskSession({ children }: { children: React.ReactNode }
   }, [deviceId, kiosk?.isActive, updateLastSeen]);
 
   // Simulate user session (replace with real user info)
-  const user = useQuery(api.auth.loggedInUser);
+  const {user: clerkUser} = useUser();
+
+    const currentUser = useQuery(api.users.getCurrentUser);
+  
+
 const userRole = useQuery(api.settings.getUserRole);
 
   // Resident selection for demo (in real app, this would be routed)
@@ -110,21 +117,21 @@ const userRole = useQuery(api.settings.getUserRole);
   }
 
   // Selfie enforcement logic
-  if (user && config && config.selfieEnforced && !selfie) {
-    return (
-      <div className="flex flex-col items-center gap-4">
-        <h2 className="text-2xl font-bold">Selfie Required</h2>
-        <SelfieCapture
-          onCapture={async (storageId: Id<"_storage">) => {
-            setSelfie(storageId);
-            // Log audit event would go here
-          }}
-          onCancel={() => setSelfieError("Selfie capture cancelled")}
-        />
-        {selfieError && <div className="text-red-600">{selfieError}</div>}
-      </div>
-    );
-  }
+  if (clerkUser && currentUser && config && config.selfieEnforced && !selfie) {
+		return (
+			<div className="flex flex-col items-center gap-4">
+				<h2 className="text-2xl font-bold">Selfie Required</h2>
+				<SelfieCapture
+					onCapture={async (storageId: Id<'_storage'>) => {
+						setSelfie(storageId);
+						// Log audit event would go here
+					}}
+					onCancel={() => setSelfieError('Selfie capture cancelled')}
+				/>
+				{selfieError && <div className="text-red-600">{selfieError}</div>}
+			</div>
+		);
+	}
 
   // Auto-lock on inactivity
   if (locked) {
