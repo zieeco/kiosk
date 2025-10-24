@@ -126,8 +126,9 @@ function AuthenticatedApp({
 			console.log('🔑 Clerk User ID:', user.id);
 			console.log('📧 Email:', user.primaryEmailAddress?.emailAddress);
 			console.log('💻 Device ID:', deviceId);
+			console.log('🔑 Role:', role);
 		}
-	}, [user, deviceId]);
+	}, [user, deviceId, role]);
 
 	// Handle automatic routing based on user role
 	useEffect(() => {
