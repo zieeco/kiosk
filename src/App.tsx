@@ -1,3 +1,4 @@
+// src/App.tsx
 import {useQuery} from 'convex/react';
 import {SignIn, SignedIn, SignedOut} from '@clerk/clerk-react';
 import {useUser} from '@clerk/clerk-react';
@@ -10,12 +11,32 @@ import AdminPortal from './components/AdminPortal';
 import CarePortal from './components/CarePortal';
 import PendingPage from './components/PendingPage';
 import {useEffect, useState} from 'react';
-import {getDeviceId} from './lib/device';
+// ✅ Import the NEW async device ID function
+import {getOrCreateDeviceId} from './lib/device';
+
+// ✅ Global device ID (safe: never changes after init)
+let globalDeviceId: string | null = null;
 
 function App() {
 	const urlParams = new URLSearchParams(window.location.search);
 	const checklistToken = urlParams.get('checklist');
 	const [currentRoute, setCurrentRoute] = useState(window.location.pathname);
+
+	// ✅ Initialize device ID once at app startup
+	useEffect(() => {
+		if (globalDeviceId === null) {
+			getOrCreateDeviceId()
+				.then((id) => {
+					globalDeviceId = id;
+					console.log('Intialized device ID:', id);
+				})
+				.catch((err) => {
+					console.error('Failed to initialize device ID:', err);
+					// Fallback: generate temporary ID (won't pass validation, but avoids crash)
+					globalDeviceId = `temp_${Math.random().toString(36).slice(2, 10)}`;
+				});
+		}
+	}, []);
 
 	// Show Guardian Checklist page if checklistToken is present
 	if (checklistToken) {
@@ -60,6 +81,7 @@ function App() {
 				<AuthenticatedApp
 					currentRoute={currentRoute}
 					setCurrentRoute={setCurrentRoute}
+					deviceId={globalDeviceId} // ✅ Pass it down
 				/>
 			</SignedIn>
 			<SignedOut>
@@ -105,24 +127,36 @@ function App() {
 function AuthenticatedApp({
 	currentRoute,
 	setCurrentRoute,
+	deviceId, // ✅ Receive deviceId as prop
 }: {
 	currentRoute: string;
 	setCurrentRoute: (route: string) => void;
+	deviceId: string | null;
 }) {
 	const {user} = useUser();
-	const deviceId = getDeviceId();
+
+	// ✅ Wait for deviceId to be ready
+	const [deviceReady, setDeviceReady] = useState(false);
+
+	useEffect(() => {
+		if (deviceId !== null) {
+			setDeviceReady(true);
+		}
+	}, [deviceId]);
 
 	// Get session info and device authorization
 	const sessionInfo = useQuery(api.access.getSessionInfo);
 	const role = useQuery(api.settings.getUserRole);
 	const deviceAuthorization = useQuery(
-		user?.id ? api.employees.checkDeviceAuthorization : 'skip',
-		user?.id ? {clerkUserId: user.id, deviceId} : 'skip'
+		user?.id && deviceReady ? api.employees.checkDeviceAuthorization : 'skip',
+		user?.id && deviceReady
+			? {clerkUserId: user.id, deviceId: deviceId!}
+			: 'skip'
 	);
 
 	// Debug logging
 	useEffect(() => {
-		if (user?.id) {
+		if (user?.id && deviceId) {
 			console.log('🔑 Clerk User ID:', user.id);
 			console.log('📧 Email:', user.primaryEmailAddress?.emailAddress);
 			console.log('💻 Device ID:', deviceId);
@@ -141,7 +175,12 @@ function AuthenticatedApp({
 	}, [sessionInfo, currentRoute, setCurrentRoute]);
 
 	// Loading state
-	if (!user || sessionInfo === undefined || role === undefined) {
+	if (
+		!user ||
+		sessionInfo === undefined ||
+		role === undefined ||
+		!deviceReady
+	) {
 		return (
 			<div className="flex items-center justify-center min-h-screen">
 				<div className="text-center">
@@ -152,7 +191,7 @@ function AuthenticatedApp({
 		);
 	}
 
-	// Device authorization check (skip if no device assigned or still loading)
+	// Device authorization check
 	if (deviceAuthorization === undefined) {
 		return (
 			<div className="flex items-center justify-center min-h-screen">
