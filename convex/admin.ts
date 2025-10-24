@@ -334,6 +334,9 @@ export const syncLocationsFromStrings = mutation({
 			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', identity.subject))
 			.first();
 
+			console.log('what is my user role?::', userRole);
+			console.log('what is my user role role?::', userRole!.role);
+
 		if (!userRole || userRole.role !== 'admin') {
 			throw new Error('Unauthorized');
 		}
