@@ -1,6 +1,5 @@
 import {v} from 'convex/values';
 import {mutation, query} from './_generated/server';
-import {getAuthUserId} from '@convex-dev/auth/server';
 
 // Generate a simple token for device registration
 function generateDeviceToken(): string {
@@ -32,15 +31,17 @@ export const registerDevice = mutation({
 		notes: v.optional(v.string()),
 	},
 	handler: async (ctx, args) => {
-		const userId = await getAuthUserId(ctx);
-		if (!userId) {
+		// ✅ CLERK AUTH: Get user identity
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) {
 			throw new Error('Not authenticated');
 		}
+		const clerkUserId = identity.subject;
 
 		// Check if user is admin
 		const role = await ctx.db
 			.query('roles')
-			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', userId))
+			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', clerkUserId))
 			.first();
 
 		if (role?.role !== 'admin') {
@@ -64,7 +65,7 @@ export const registerDevice = mutation({
 			location: args.location,
 			isActive: true,
 			deviceType: args.deviceType || 'desktop',
-			registeredBy: userId,
+			registeredBy: clerkUserId,
 			registeredAt: Date.now(),
 			metadata: args.metadata,
 			notes: args.notes,
@@ -72,7 +73,7 @@ export const registerDevice = mutation({
 
 		// Log the registration
 		await ctx.db.insert('audit_logs', {
-			clerkUserId: userId,
+			clerkUserId: clerkUserId,
 			event: 'device_registered',
 			timestamp: Date.now(),
 			deviceId: args.deviceId,
@@ -122,15 +123,17 @@ export const listDevices = query({
 		location: v.optional(v.string()),
 	},
 	handler: async (ctx, args) => {
-		const userId = await getAuthUserId(ctx);
-		if (!userId) {
+		// ✅ CLERK AUTH: Get user identity
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) {
 			throw new Error('Not authenticated');
 		}
+		const clerkUserId = identity.subject;
 
 		// Check if user is admin
 		const role = await ctx.db
 			.query('roles')
-			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', userId))
+			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', clerkUserId))
 			.first();
 
 		if (role?.role !== 'admin') {
@@ -160,15 +163,17 @@ export const updateDeviceStatus = mutation({
 		isActive: v.boolean(),
 	},
 	handler: async (ctx, args) => {
-		const userId = await getAuthUserId(ctx);
-		if (!userId) {
+		// ✅ CLERK AUTH: Get user identity
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) {
 			throw new Error('Not authenticated');
 		}
+		const clerkUserId = identity.subject;
 
 		// Check if user is admin
 		const role = await ctx.db
 			.query('roles')
-			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', userId))
+			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', clerkUserId))
 			.first();
 
 		if (role?.role !== 'admin') {
@@ -192,7 +197,7 @@ export const updateDeviceStatus = mutation({
 
 		// Log the change
 		await ctx.db.insert('audit_logs', {
-			clerkUserId: userId,
+			clerkUserId: clerkUserId,
 			event: args.isActive ? 'device_activated' : 'device_deactivated',
 			timestamp: Date.now(),
 			deviceId: args.deviceId,
@@ -210,15 +215,17 @@ export const deleteDevice = mutation({
 		deviceId: v.string(),
 	},
 	handler: async (ctx, args) => {
-		const userId = await getAuthUserId(ctx);
-		if (!userId) {
+		// ✅ CLERK AUTH: Get user identity
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) {
 			throw new Error('Not authenticated');
 		}
+		const clerkUserId = identity.subject;
 
 		// Check if user is admin
 		const role = await ctx.db
 			.query('roles')
-			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', userId))
+			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', clerkUserId))
 			.first();
 
 		if (role?.role !== 'admin') {
@@ -240,7 +247,7 @@ export const deleteDevice = mutation({
 
 		// Log the deletion
 		await ctx.db.insert('audit_logs', {
-			clerkUserId: userId,
+			clerkUserId: clerkUserId,
 			event: 'device_deleted',
 			timestamp: Date.now(),
 			deviceId: args.deviceId,
@@ -261,15 +268,17 @@ export const updateDevice = mutation({
 		notes: v.optional(v.string()),
 	},
 	handler: async (ctx, args) => {
-		const userId = await getAuthUserId(ctx);
-		if (!userId) {
+		// ✅ CLERK AUTH: Get user identity
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) {
 			throw new Error('Not authenticated');
 		}
+		const clerkUserId = identity.subject;
 
 		// Check if user is admin
 		const role = await ctx.db
 			.query('roles')
-			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', userId))
+			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', clerkUserId))
 			.first();
 
 		if (role?.role !== 'admin') {
@@ -297,7 +306,7 @@ export const updateDevice = mutation({
 
 		// Log the update
 		await ctx.db.insert('audit_logs', {
-			clerkUserId: userId,
+			clerkUserId: clerkUserId,
 			event: 'device_updated',
 			timestamp: Date.now(),
 			deviceId: args.deviceId,
@@ -315,10 +324,12 @@ export const recordDeviceUsage = mutation({
 		deviceId: v.string(),
 	},
 	handler: async (ctx, args) => {
-		const userId = await getAuthUserId(ctx);
-		if (!userId) {
+		// ✅ CLERK AUTH: Get user identity
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) {
 			throw new Error('Not authenticated');
 		}
+		const clerkUserId = identity.subject;
 
 		// Find the device
 		const device = await ctx.db
@@ -337,13 +348,13 @@ export const recordDeviceUsage = mutation({
 		// Update device last used info
 		await ctx.db.patch(device._id, {
 			lastUsedAt: Date.now(),
-			lastUsedBy: userId,
+			lastUsedBy: clerkUserId,
 		});
 
 		// Update or create user record
 		const user = await ctx.db
 			.query('users')
-			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', userId))
+			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', clerkUserId))
 			.first();
 
 		if (user) {
@@ -357,18 +368,22 @@ export const recordDeviceUsage = mutation({
 			// Get user info from roles or employees table
 			const role = await ctx.db
 				.query('roles')
-				.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', userId))
+				.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', clerkUserId))
 				.first();
 
 			const employee = await ctx.db
 				.query('employees')
-				.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', userId))
+				.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', clerkUserId))
 				.first();
 
 			await ctx.db.insert('users', {
-				clerkUserId: userId,
-				email: employee?.workEmail || employee?.email || 'unknown@example.com',
-				name: employee?.name || 'Unknown User',
+				clerkUserId: clerkUserId,
+				email:
+					employee?.workEmail ||
+					employee?.email ||
+					identity.email ||
+					'unknown@example.com',
+				name: employee?.name || identity.name || 'Unknown User',
 				lastLoginAt: Date.now(),
 				lastLoginDeviceId: args.deviceId,
 				lastLoginLocation: device.location,
