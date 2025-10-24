@@ -87,6 +87,7 @@ export function clearDeviceId(): void {
 	localStorage.removeItem(DEVICE_ID_KEY);
 }
 
+
 /**
  * Check if device ID exists in storage
  */
@@ -118,3 +119,119 @@ export function isValidDeviceId(deviceId: string): boolean {
 	const pattern = /^device_[0-9a-f]{8}_[0-9a-z]+$/;
 	return pattern.test(deviceId);
 }
+
+// =========================
+
+// src/lib/deviceId.ts
+const STORAGE_KEY = 'kiosk_device_id';
+
+// Safe localStorage helpers
+function safeStorageGet(key: string): string | null {
+	try {
+		return localStorage.getItem(key);
+	} catch {
+		return null;
+	}
+}
+
+function safeStorageSet(key: string, value: string): void {
+	try {
+		localStorage.setItem(key, value);
+	} catch {
+		// Silently ignore (e.g., private browsing)
+	}
+}
+
+/**
+ * Generates a stable, deterministic fingerprint using browser + hardware signals.
+ * Same device → same fingerprint → same device ID.
+ */
+async function generateStableFingerprint(): Promise<string> {
+	// Collect stable device characteristics
+	const components = [
+		navigator.userAgent,
+		navigator.platform,
+		String(navigator.hardwareConcurrency ?? 0),
+		// deviceMemory is only available in secure contexts (HTTPS/localhost)
+		String(
+			(navigator as Navigator & {deviceMemory?: number}).deviceMemory ?? 0
+		),
+		`${screen.width}x${screen.height}`,
+		String(screen.colorDepth),
+		navigator.language,
+		await getCanvasFingerprint(),
+	];
+
+	const data = components.join('|');
+	const encoder = new TextEncoder();
+	const hashBuffer = await crypto.subtle.digest(
+		'SHA-256',
+		encoder.encode(data)
+	);
+	const hashArray = Array.from(new Uint8Array(hashBuffer));
+	return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * Canvas fingerprinting for additional entropy.
+ * Helps distinguish identical hardware/browser configs.
+ */
+async function getCanvasFingerprint(): Promise<string> {
+	try {
+		const canvas = document.createElement('canvas');
+		canvas.width = 200;
+		canvas.height = 50;
+		const ctx = canvas.getContext('2d');
+		if (!ctx) return 'no-canvas';
+
+		// Draw text with anti-aliasing (varies by GPU/drivers)
+		ctx.textBaseline = 'top';
+		ctx.font = "18px 'Helvetica', Arial, sans-serif";
+		ctx.fillStyle = '#f60';
+		ctx.fillRect(0, 0, 200, 50);
+		ctx.fillStyle = '#000';
+		ctx.fillText('KioskAuth', 5, 5);
+
+		return canvas.toDataURL();
+	} catch {
+		return 'canvas-error';
+	}
+}
+
+/**
+ * Get or generate a persistent device ID.
+ * - If already stored: return it.
+ * - If not: generate deterministic ID from fingerprint and store it.
+ *
+ * ⚠️ This function is async because fingerprinting uses crypto + canvas.
+ */
+export async function getOrCreateDeviceId(): Promise<string> {
+	const existing = safeStorageGet(STORAGE_KEY);
+	if (existing) {
+		return existing;
+	}
+
+	const fingerprint = await generateStableFingerprint();
+	// Use 16 hex chars = 64 bits of entropy (more than enough for 6 devices)
+	const deviceId = `device_${fingerprint.substring(0, 16)}`;
+	safeStorageSet(STORAGE_KEY, deviceId);
+	return deviceId;
+}
+
+/**
+ * For debugging: log device info and ID (use during kiosk setup)
+ */
+export async function debugDeviceId(): Promise<void> {
+	const id = await getOrCreateDeviceId();
+	console.log('✅ Kiosk Device ID:', id);
+	console.log('ℹ️  Device Info:', {
+		userAgent: navigator.userAgent,
+		platform: navigator.platform,
+		screen: `${screen.width}x${screen.height}`,
+		language: navigator.language,
+		hardwareConcurrency: navigator.hardwareConcurrency,
+		deviceMemory: (navigator as any).deviceMemory,
+	});
+}
+
+
