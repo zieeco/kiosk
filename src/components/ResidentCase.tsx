@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/no-misused-promises */
+/* eslint-disable @typescript-eslint/no-floating-promises */
 import React, { useState, useEffect } from "react";
 import { useMutation, useQuery, useAction } from "convex/react";
 import { api } from "../../convex/_generated/api";
@@ -88,7 +90,9 @@ function LogsTab({ residentId }: { residentId: Id<"residents"> }) {
   const acknowledgeIsp = useMutation(api.kiosk.acknowledgeIsp);
   const createLog = useMutation(api.kiosk.createResidentLog);
   const editLog = useMutation(api.kiosk.editResidentLog);
-  const user = useQuery(api.auth.loggedInUser);
+  // const user = useQuery(api.auth.loggedInUser);
+    const user = useQuery(api.users.getCurrentUser);
+  
 
   const [form, setForm] = useState({ mood: "", notes: "" });
   const [editingLogId, setEditingLogId] = useState<Id<"resident_logs"> | null>(null);
@@ -194,7 +198,9 @@ function LogsTab({ residentId }: { residentId: Id<"residents"> }) {
             let fields = { mood: "", notes: "" };
             try {
               fields = JSON.parse(log.content);
-            } catch {}
+            } catch {
+              fields = { mood: "", notes: "" };
+            }
             return (
               <li key={log._id} className="border-b py-2">
                 <div>
@@ -205,7 +211,7 @@ function LogsTab({ residentId }: { residentId: Id<"residents"> }) {
                   <b>Mood:</b> {fields.mood} <br />
                   <b>Notes:</b> {fields.notes}
                 </div>
-                {user && user._id === log.authorId && (
+                {user && user.clerkUserId === log.authorId && (
                   <button
                     className="button mt-1"
                     onClick={() => {

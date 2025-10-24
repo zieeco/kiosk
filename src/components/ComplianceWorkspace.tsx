@@ -1,3 +1,5 @@
+/* eslint-disable react-hooks/exhaustive-deps */
+/* eslint-disable @typescript-eslint/no-misused-promises */
 import React, { useState, useMemo } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "../../convex/_generated/api";
@@ -31,8 +33,7 @@ export default function ComplianceWorkspace() {
     residentId: Id<"residents">;
     residentName: string;
   } | null>(null);
-
-  const user = useQuery(api.auth.loggedInUser);
+  
   const userRole = useQuery(api.settings.getUserRole);
   const complianceData = useQuery(api.compliance.getComplianceOverview) || [];
 

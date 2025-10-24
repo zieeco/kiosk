@@ -2,6 +2,7 @@ import React, {useState} from 'react';
 import {useQuery} from 'convex/react';
 import {useUser} from '@clerk/clerk-react';
 import {api} from '../../convex/_generated/api';
+import {getDeviceId} from '../lib/device';
 import {SignOutButton} from '../SignOutButton';
 import Sidebar from './Sidebar';
 import AdminDashboard from './AdminDashboard';
@@ -12,15 +13,21 @@ import ComplianceAlerts from './ComplianceAlerts';
 import LocationsWorkspace from './LocationsWorkspace';
 import GuardianChecklistWorkspace from './GuardianChecklistWorkspace';
 import {DataCleanupWorkspace} from './DataCleanupWorkspace';
+import DeviceManagementWorkspace from './DeviceManagementWorkspace';
+import AdminDeviceBadge from './AdminDeviceBadge';
 
 export default function AdminPortal() {
 	const [activeView, setActiveView] = useState('dashboard');
 
-	// ✅ FIX: Use Clerk's useUser hook instead of Convex auth
+	// Use Clerk's useUser hook instead of Convex auth
 	const {user: clerkUser} = useUser();
 
-	// ✅ Get current user info from our users.ts query
+	// Get current user info from our users.ts query
 	const currentUser = useQuery(api.users.getCurrentUser);
+
+	// Get device check for admin badge
+	const deviceId = getDeviceId();
+	const deviceCheck = useQuery(api.devices.checkDevice, {deviceId});
 
 	const renderContent = () => {
 		switch (activeView) {
@@ -32,6 +39,8 @@ export default function AdminPortal() {
 				return <ComplianceWorkspace />;
 			case 'locations':
 				return <LocationsWorkspace />;
+			case 'devices':
+				return <DeviceManagementWorkspace />;
 			case 'guardian-checklists':
 				return <GuardianChecklistWorkspace />;
 			case 'data-cleanup':
@@ -78,6 +87,10 @@ export default function AdminPortal() {
 					</h1>
 					<SignOutButton />
 				</div>
+
+				{/* Show admin device badge if accessing from unrestricted device */}
+				{deviceCheck && <AdminDeviceBadge deviceCheck={deviceCheck} />}
+
 				<ComplianceAlerts />
 				{renderContent()}
 			</main>
