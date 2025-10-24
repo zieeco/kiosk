@@ -1,17 +1,7 @@
 import {v} from 'convex/values';
 import {mutation, query} from './_generated/server';
 
-// Generate a simple token for device registration
-function generateDeviceToken(): string {
-	const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-	let token = '';
-	for (let i = 0; i < 8; i++) {
-		token += chars.charAt(Math.floor(Math.random() * chars.length));
-	}
-	return token;
-}
-
-// MUTATION: Register a new device
+// Register a new device
 export const registerDevice = mutation({
 	args: {
 		deviceId: v.string(), // Browser fingerprint
@@ -31,7 +21,6 @@ export const registerDevice = mutation({
 		notes: v.optional(v.string()),
 	},
 	handler: async (ctx, args) => {
-		// ✅ CLERK AUTH: Get user identity
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) {
 			throw new Error('Not authenticated');
@@ -85,7 +74,7 @@ export const registerDevice = mutation({
 	},
 });
 
-// QUERY: Check if a device is registered and active
+// Check if a device is registered and active
 export const checkDevice = query({
 	args: {
 		deviceId: v.string(),
@@ -117,13 +106,12 @@ export const checkDevice = query({
 	},
 });
 
-// QUERY: Get all registered devices (admin only)
+// Get all registered devices (admin only)
 export const listDevices = query({
 	args: {
 		location: v.optional(v.string()),
 	},
 	handler: async (ctx, args) => {
-		// ✅ CLERK AUTH: Get user identity
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) {
 			throw new Error('Not authenticated');
@@ -141,29 +129,29 @@ export const listDevices = query({
 		}
 
 		// Get devices
-		let devicesQuery = ctx.db.query('devices');
+		let devices;
 
 		if (args.location) {
-			devicesQuery = devicesQuery.withIndex('by_location', (q) =>
-				q.eq('location', args.location)
-			);
+			devices = await ctx.db
+				.query('devices')
+				.withIndex('by_location', (q) => q.eq('location', args.location!))
+				.collect();
+		} else {
+			devices = await ctx.db.query('devices').collect();
 		}
-
-		const devices = await devicesQuery.collect();
 
 		// Sort by registration date (newest first)
 		return devices.sort((a, b) => b.registeredAt - a.registeredAt);
 	},
 });
 
-// MUTATION: Update device status (activate/deactivate)
+// Update device status (activate/deactivate)
 export const updateDeviceStatus = mutation({
 	args: {
 		deviceId: v.string(),
 		isActive: v.boolean(),
 	},
 	handler: async (ctx, args) => {
-		// ✅ CLERK AUTH: Get user identity
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) {
 			throw new Error('Not authenticated');
@@ -209,13 +197,12 @@ export const updateDeviceStatus = mutation({
 	},
 });
 
-// MUTATION: Delete a device
+// Delete a device
 export const deleteDevice = mutation({
 	args: {
 		deviceId: v.string(),
 	},
 	handler: async (ctx, args) => {
-		// ✅ CLERK AUTH: Get user identity
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) {
 			throw new Error('Not authenticated');
@@ -259,7 +246,7 @@ export const deleteDevice = mutation({
 	},
 });
 
-// MUTATION: Update device info
+// Update device info
 export const updateDevice = mutation({
 	args: {
 		deviceId: v.string(),
@@ -268,7 +255,6 @@ export const updateDevice = mutation({
 		notes: v.optional(v.string()),
 	},
 	handler: async (ctx, args) => {
-		// ✅ CLERK AUTH: Get user identity
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) {
 			throw new Error('Not authenticated');
@@ -318,13 +304,12 @@ export const updateDevice = mutation({
 	},
 });
 
-// MUTATION: Record device usage (called when someone logs in)
+// Record device usage (called when someone logs in)
 export const recordDeviceUsage = mutation({
 	args: {
 		deviceId: v.string(),
 	},
 	handler: async (ctx, args) => {
-		// ✅ CLERK AUTH: Get user identity
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) {
 			throw new Error('Not authenticated');
@@ -358,6 +343,7 @@ export const recordDeviceUsage = mutation({
 			.first();
 
 		if (user) {
+			// User exists - just update login info
 			await ctx.db.patch(user._id, {
 				lastLoginAt: Date.now(),
 				lastLoginDeviceId: args.deviceId,
@@ -365,12 +351,6 @@ export const recordDeviceUsage = mutation({
 				updatedAt: Date.now(),
 			});
 		} else {
-			// Get user info from roles or employees table
-			const role = await ctx.db
-				.query('roles')
-				.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', clerkUserId))
-				.first();
-
 			const employee = await ctx.db
 				.query('employees')
 				.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', clerkUserId))
