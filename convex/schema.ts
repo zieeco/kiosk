@@ -12,7 +12,7 @@ const applicationTables = {
 		careNotes: v.optional(v.string()),
 		profileImageId: v.optional(v.id('_storage')),
 		createdAt: v.optional(v.number()),
-		createdBy: v.optional(v.string()), // Changed to string for clerkUserId
+		createdBy: v.optional(v.string()),
 	})
 		.index('by_location', ['location'])
 		.index('by_createdBy', ['createdBy']),
@@ -25,7 +25,7 @@ const applicationTables = {
 		address: v.optional(v.string()),
 		residentIds: v.optional(v.array(v.id('residents'))),
 		createdAt: v.optional(v.number()),
-		createdBy: v.optional(v.string()), // Changed to string for clerkUserId
+		createdBy: v.optional(v.string()),
 	}).index('by_createdBy', ['createdBy']),
 
 	employees: defineTable({
@@ -45,24 +45,24 @@ const applicationTables = {
 		locations: v.array(v.string()),
 		employmentStatus: v.optional(v.string()),
 		createdAt: v.optional(v.number()),
-		createdBy: v.optional(v.string()), // Changed to string for clerkUserId
+		createdBy: v.optional(v.string()),
 		updatedAt: v.optional(v.number()),
-		clerkUserId: v.optional(v.string()), // Link to Clerk user
-		assignedDeviceId: v.optional(v.string()), // New field for device restriction
-		invitedAt: v.optional(v.number()), // Add the missing invitedAt field
-		invitedBy: v.optional(v.string()), // Add invitedBy field
-		hasAcceptedInvite: v.optional(v.boolean()), // Add hasAcceptedInvite field
-		inviteToken: v.optional(v.string()), // Add inviteToken field
-		inviteExpiresAt: v.optional(v.number()), // Add inviteExpiresAt field
+		clerkUserId: v.optional(v.string()),
+		assignedDeviceId: v.optional(v.string()),
+		invitedAt: v.optional(v.number()),
+		invitedBy: v.optional(v.string()),
+		hasAcceptedInvite: v.optional(v.boolean()),
+		inviteToken: v.optional(v.string()),
+		inviteExpiresAt: v.optional(v.number()),
 	})
 		.index('by_workEmail', ['workEmail'])
 		.index('by_email', ['email'])
 		.index('by_clerkUserId', ['clerkUserId'])
-		.index('by_assignedDeviceId', ['assignedDeviceId']) // New index for device restriction
-		.index('by_inviteToken', ['inviteToken']), // Add index for inviteToken
+		.index('by_assignedDeviceId', ['assignedDeviceId'])
+		.index('by_inviteToken', ['inviteToken']),
 
 	roles: defineTable({
-		clerkUserId: v.string(), // Changed from userId to clerkUserId
+		clerkUserId: v.string(),
 		role: v.optional(
 			v.union(
 				v.literal('admin'),
@@ -72,10 +72,10 @@ const applicationTables = {
 			)
 		),
 		locations: v.optional(v.array(v.string())),
-		assignedBy: v.optional(v.string()), // Changed to string for clerkUserId
+		assignedBy: v.optional(v.string()),
 		assignedAt: v.optional(v.number()),
 		teams: v.optional(v.array(v.string())),
-	}).index('by_clerkUserId', ['clerkUserId']), // Changed index
+	}).index('by_clerkUserId', ['clerkUserId']),
 
 	shifts: defineTable({
 		clerkUserId: v.string(),
@@ -88,7 +88,7 @@ const applicationTables = {
 		clockInSelfie: v.optional(v.id('_storage')),
 		clockOutSelfie: v.optional(v.id('_storage')),
 	})
-		.index('by_clerkUserId', ['clerkUserId']) // Changed index
+		.index('by_clerkUserId', ['clerkUserId'])
 		.index('by_location', ['location'])
 		.index('by_clockInTime', ['clockInTime']),
 
@@ -110,9 +110,9 @@ const applicationTables = {
 		lastHeartbeat: v.optional(v.number()),
 		lastSeenAt: v.optional(v.number()),
 		registeredAt: v.optional(v.number()),
-		registeredBy: v.optional(v.string()), // Changed to string for clerkUserId
+		registeredBy: v.optional(v.string()),
 		createdAt: v.optional(v.number()),
-		createdBy: v.optional(v.string()), // Changed to string for clerkUserId
+		createdBy: v.optional(v.string()),
 	})
 		.index('by_location', ['location'])
 		.index('by_deviceId', ['deviceId']),
@@ -125,7 +125,7 @@ const applicationTables = {
 		createdBy: v.optional(v.string()),
 		location: v.optional(v.string()),
 		shiftId: v.optional(v.id('shifts')),
-		authorId: v.optional(v.string()), // Changed to string for clerkUserId
+		authorId: v.optional(v.string()),
 		version: v.optional(v.number()),
 		template: v.optional(v.string()),
 		createdAt: v.optional(v.number()),
@@ -144,14 +144,14 @@ const applicationTables = {
 		.index('by_createdAt', ['createdAt']),
 
 	audit_logs: defineTable({
-		clerkUserId: v.optional(v.string()), // Changed to string for clerkUserId
+		clerkUserId: v.optional(v.string()),
 		event: v.string(),
 		timestamp: v.number(),
 		deviceId: v.string(),
 		location: v.string(),
 		details: v.optional(v.string()),
 	})
-		.index('by_clerkUserId', ['clerkUserId']) // Changed index
+		.index('by_clerkUserId', ['clerkUserId'])
 		.index('by_timestamp', ['timestamp'])
 		.index('by_event', ['event']),
 
@@ -164,7 +164,7 @@ const applicationTables = {
 		severity: v.string(),
 		active: v.boolean(),
 		createdAt: v.number(),
-		dismissedBy: v.optional(v.string()), // Changed to string for clerkUserId
+		dismissedBy: v.optional(v.string()),
 		dismissedAt: v.optional(v.number()),
 		metadata: v.optional(
 			v.object({
@@ -196,11 +196,11 @@ const applicationTables = {
 		contentType: v.string(),
 		preparedBy: v.optional(v.string()),
 		notes: v.optional(v.string()),
-		uploadedBy: v.string(), // Changed to string for clerkUserId
+		uploadedBy: v.string(),
 		uploadedAt: v.number(),
-		activatedBy: v.optional(v.string()), // Changed to string for clerkUserId
+		activatedBy: v.optional(v.string()),
 		activatedAt: v.optional(v.number()),
-		archivedBy: v.optional(v.string()), // Changed to string for clerkUserId
+		archivedBy: v.optional(v.string()),
 		archivedAt: v.optional(v.number()),
 	})
 		.index('by_residentId', ['residentId'])
@@ -211,7 +211,7 @@ const applicationTables = {
 	isp_access_logs: defineTable({
 		ispFileId: v.id('isp_files'),
 		residentId: v.id('residents'),
-		clerkUserId: v.string(), // Changed to string for clerkUserId
+		clerkUserId: v.string(),
 		action: v.union(
 			v.literal('upload'),
 			v.literal('download'),
@@ -230,7 +230,7 @@ const applicationTables = {
 	})
 		.index('by_ispFileId', ['ispFileId'])
 		.index('by_residentId', ['residentId'])
-		.index('by_clerkUserId', ['clerkUserId']) // Changed index
+		.index('by_clerkUserId', ['clerkUserId'])
 		.index('by_timestamp', ['timestamp'])
 		.index('by_action', ['action']),
 
@@ -246,11 +246,11 @@ const applicationTables = {
 
 	isp_acknowledgments: defineTable({
 		residentId: v.id('residents'),
-		clerkUserId: v.string(), // Changed to string for clerkUserId
+		clerkUserId: v.string(),
 		ispId: v.id('isp'),
 		acknowledgedAt: v.number(),
 		acknowledgedIsp: v.id('isp'),
-	}).index('by_resident_and_user', ['residentId', 'clerkUserId']), // Changed index
+	}).index('by_resident_and_user', ['residentId', 'clerkUserId']),
 
 	fire_evac: defineTable({
 		residentId: v.id('residents'),
@@ -261,7 +261,7 @@ const applicationTables = {
 		medicalEquipment: v.optional(v.string()),
 		specialInstructions: v.optional(v.string()),
 		createdAt: v.optional(v.number()),
-		createdBy: v.optional(v.string()), // Changed to string for clerkUserId
+		createdBy: v.optional(v.string()),
 		fileStorageId: v.optional(v.id('_storage')),
 		fileName: v.optional(v.string()),
 		fileSize: v.optional(v.number()),
@@ -295,7 +295,7 @@ const applicationTables = {
 				required: v.boolean(),
 			})
 		),
-		createdBy: v.string(), // Changed to string for clerkUserId
+		createdBy: v.string(),
 		createdAt: v.number(),
 		active: v.boolean(),
 	}).index('by_active', ['active']),
@@ -331,7 +331,7 @@ const applicationTables = {
 			v.literal('used'),
 			v.literal('expired')
 		),
-		issuedBy: v.string(), // Changed to string for clerkUserId
+		issuedBy: v.string(),
 		issuedAt: v.number(),
 		expiresAt: v.number(),
 		usedAt: v.optional(v.number()),
@@ -339,32 +339,64 @@ const applicationTables = {
 		.index('by_token', ['token'])
 		.index('by_status', ['status']),
 
-
-
 	devices: defineTable({
-		deviceId: v.string(), // Unique identifier for the physical device
-		clerkUserId: v.optional(v.string()), // The Clerk user ID currently associated with this device
-		locationId: v.id('locations'), // The location where this device is assigned
-		isAuthorized: v.boolean(), // Whether this device is authorized for login
-		lastLoginTime: v.optional(v.number()), // Timestamp of the last successful login from this device
-		lastLoginIp: v.optional(v.string()), // IP address of the last successful login
-		createdAt: v.number(),
-		updatedAt: v.optional(v.number()),
+		deviceId: v.string(), // Browser fingerprint (e.g., "a3f5d8e9c2b1...")
+		deviceName: v.string(), // Human-readable name (e.g., "Kiosk 1 - Front Desk")
+		location: v.string(), // Location name (e.g., "Main Office", "Building A")
+		isActive: v.boolean(), // Whether this device can be used right now
+		deviceType: v.optional(
+			v.union(v.literal('kiosk'), v.literal('mobile'), v.literal('desktop'))
+		),
+		registeredBy: v.string(), // Clerk user ID of admin who registered this device
+		registeredAt: v.number(), // Timestamp when device was registered
+		lastUsedAt: v.optional(v.number()), // Last time someone logged in from this device
+		lastUsedBy: v.optional(v.string()), // Clerk user ID of last person who used it
+		metadata: v.optional(
+			v.object({
+				browser: v.optional(v.string()),
+				os: v.optional(v.string()),
+				screenResolution: v.optional(v.string()),
+				ipAddress: v.optional(v.string()),
+			})
+		),
+		notes: v.optional(v.string()), // Admin notes about this device
 	})
 		.index('by_deviceId', ['deviceId'])
-		.index('by_clerkUserId', ['clerkUserId'])
-		.index('by_locationId', ['locationId']),
+		.index('by_location', ['location'])
+		.index('by_isActive', ['isActive']),
 
-    // Add the missing locations table
-    locations: defineTable({
-        name: v.string(),
-        address: v.optional(v.string()),
-        capacity: v.optional(v.number()),
-        status: v.optional(v.union(v.literal("active"), v.literal("inactive"), v.literal("maintenance"), v.literal("disabled"), v.literal("retired"))),
-        createdBy: v.optional(v.string()),
-        createdAt: v.optional(v.number()),
-        updatedAt: v.optional(v.number()),
-    }).index('by_name', ['name']), // Add an index for querying by name
+	// NEW: Track user login sessions (optional but useful for auditing)
+	users: defineTable({
+		clerkUserId: v.string(), // The Clerk user ID
+		email: v.string(),
+		name: v.optional(v.string()),
+		lastLoginAt: v.optional(v.number()), // Last successful login time
+		lastLoginDeviceId: v.optional(v.string()), // Device they last logged in from
+		lastLoginLocation: v.optional(v.string()), // Location of last login
+		createdAt: v.number(), // When they first used the app
+		updatedAt: v.optional(v.number()),
+	})
+		.index('by_clerkUserId', ['clerkUserId'])
+		.index('by_email', ['email']),
+
+	// Add the missing locations table
+	locations: defineTable({
+		name: v.string(),
+		address: v.optional(v.string()),
+		capacity: v.optional(v.number()),
+		status: v.optional(
+			v.union(
+				v.literal('active'),
+				v.literal('inactive'),
+				v.literal('maintenance'),
+				v.literal('disabled'),
+				v.literal('retired')
+			)
+		),
+		createdBy: v.optional(v.string()),
+		createdAt: v.optional(v.number()),
+		updatedAt: v.optional(v.number()),
+	}).index('by_name', ['name']),
 };
 
 export default defineSchema(applicationTables);
