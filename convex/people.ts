@@ -1,9 +1,13 @@
 import {mutation, query, action} from './_generated/server';
 import {v} from 'convex/values';
-// import { getAuthUserId } from "@convex-dev/auth/server"; // Removed as per plan
-import { Id } from "./_generated/dataModel"; // Re-added Id import
+import {Id} from './_generated/dataModel'; // Re-added Id import
 import {api, internal} from './_generated/api';
 import {Resend} from 'resend';
+
+const BASE_URL = process.env.VITE_CONVEX_URL || 'http://localhost:5173';
+const API_KEY = process.env.RESEND_API_KEY;
+const EMAIL_SENDER =
+	process.env.FROM_EMAIL || 'Care App <noreply@care-app.convex.app>';
 
 // Helper: Get user role doc
 async function getUserRoleDoc(ctx: any, clerkUserId: string) {
@@ -88,12 +92,10 @@ export const sendEmployeeInviteEmail = action({
 	},
 	handler: async (ctx, {email, name, inviteUrl, role, locations}) => {
 		// Use custom Resend API key if available, otherwise fall back to Convex proxy
-		const apiKey =
-			process.env.RESEND_API_KEY || process.env.CONVEX_RESEND_API_KEY;
-		if (!apiKey) {
+		if (!API_KEY) {
 			throw new Error('No Resend API key configured');
 		}
-		const resend = new Resend(apiKey);
+		const resend = new Resend(API_KEY);
 
 		const subject = "You're invited to join the Care App";
 		const html = `
@@ -111,10 +113,8 @@ export const sendEmployeeInviteEmail = action({
       </div>
     `;
 
-		const fromEmail =
-			process.env.FROM_EMAIL || 'Care App <noreply@care-app.convex.app>';
 		const {error} = await resend.emails.send({
-			from: fromEmail,
+			from: EMAIL_SENDER,
 			to: email,
 			subject,
 			html,
@@ -129,34 +129,33 @@ export const sendEmployeeInviteEmail = action({
 
 // Query: Get employee invite link details
 export const getEmployeeInviteLink = query({
-  args: {
-    employeeId: v.id("employees"),
-  },
-  handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
-    const clerkUserId = identity.subject;
+	args: {
+		employeeId: v.id('employees'),
+	},
+	handler: async (ctx, args) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error('Not authenticated');
+		const clerkUserId = identity.subject;
 
-    await requireAdmin(ctx, clerkUserId); // Only admin can view invite links
+		await requireAdmin(ctx, clerkUserId); // Only admin can view invite links
 
-    const employee = await ctx.db.get(args.employeeId);
-    if (!employee) {
-      return null;
-    }
+		const employee = await ctx.db.get(args.employeeId);
+		if (!employee) {
+			return null;
+		}
 
-    if (!employee.inviteToken || !employee.inviteExpiresAt) {
-      return null; // No active invite for this employee
-    }
+		if (!employee.inviteToken || !employee.inviteExpiresAt) {
+			return null; // No active invite for this employee
+		}
 
-    // Reconstruct the invite URL
-    const baseUrl = 'https://fleet-bobcat-14.convex.app'; // This should ideally come from an environment variable
-    const inviteUrl = `${baseUrl}/?invite=${employee.inviteToken}`;
+		// Reconstruct the invite URL
+		const inviteUrl = `${BASE_URL}/?invite=${employee.inviteToken}`;
 
-    return {
-      url: inviteUrl,
-      expiresAt: employee.inviteExpiresAt,
-    };
-  },
+		return {
+			url: inviteUrl,
+			expiresAt: employee.inviteExpiresAt,
+		};
+	},
 });
 
 // Onboard new employee (admin only)
@@ -164,7 +163,11 @@ export const onboardEmployee = mutation({
 	args: {
 		name: v.string(),
 		email: v.string(),
-		role: v.union(v.literal("admin"), v.literal("supervisor"), v.literal("staff")),
+		role: v.union(
+			v.literal('admin'),
+			v.literal('supervisor'),
+			v.literal('staff')
+		),
 		locations: v.array(v.string()),
 	},
 	handler: async (ctx, {name, email, role, locations}) => {
@@ -191,7 +194,7 @@ export const onboardEmployee = mutation({
 		});
 
 		// Create a role record for the employee with a temporary clerkUserId (token)
-		await ctx.db.insert("roles", {
+		await ctx.db.insert('roles', {
 			clerkUserId: token,
 			role: role,
 			locations: locations,
@@ -207,8 +210,7 @@ export const onboardEmployee = mutation({
 		);
 
 		// Build invite URL using the production deployment URL
-		const baseUrl = 'https://fleet-bobcat-14.convex.app';
-		const inviteUrl = `${baseUrl}/?invite=${token}`;
+		const inviteUrl = `${BASE_URL}/?invite=${token}`;
 
 		// Send invite email via Resend action
 		// NOTE: Mutations cannot call actions directly. The client should call sendEmployeeInviteEmail after onboarding.
@@ -400,7 +402,6 @@ export const createGuardian = mutation({
 		if (!identity) throw new Error('Not authenticated');
 		const clerkUserId = identity.subject;
 
-
 		await requireCareAccess(ctx, clerkUserId);
 
 		const guardianId = await ctx.db.insert('guardians', {
@@ -456,7 +457,12 @@ export const updateGuardian = mutation({
 			residentIds,
 		});
 
-		await audit(ctx, 'update_guardian', clerkUserId, `guardianId=${guardianId}`);
+		await audit(
+			ctx,
+			'update_guardian',
+			clerkUserId,
+			`guardianId=${guardianId}`
+		);
 		return guardianId;
 	},
 });
@@ -468,7 +474,6 @@ export const deleteGuardian = mutation({
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error('Not authenticated');
 		const clerkUserId = identity.subject;
-
 
 		await requireAdmin(ctx, clerkUserId);
 
@@ -514,7 +519,6 @@ export const deleteResident = mutation({
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error('Not authenticated');
 		const clerkUserId = identity.subject;
-
 
 		await requireAdmin(ctx, clerkUserId);
 
