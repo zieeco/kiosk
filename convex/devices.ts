@@ -75,11 +75,36 @@ export const registerDevice = mutation({
 });
 
 // Check if a device is registered and active
+// Returns bypass info for admins who can login from anywhere
 export const checkDevice = query({
 	args: {
 		deviceId: v.string(),
 	},
 	handler: async (ctx, args) => {
+		// Check if current user is admin
+		const identity = await ctx.auth.getUserIdentity();
+		if (identity) {
+			const role = await ctx.db
+				.query('roles')
+				.withIndex('by_clerkUserId', (q) =>
+					q.eq('clerkUserId', identity.subject)
+				)
+				.first();
+
+			// Admins can login from any device
+			if (role?.role === 'admin') {
+				return {
+					isRegistered: true,
+					isActive: true,
+					isAdmin: true,
+					deviceName: 'Admin Device (unrestricted)',
+					location: 'Any Location',
+					message: 'Admin access granted from any device',
+				};
+			}
+		}
+
+		// For non-admins, check device registration
 		const device = await ctx.db
 			.query('devices')
 			.withIndex('by_deviceId', (q) => q.eq('deviceId', args.deviceId))
@@ -89,13 +114,15 @@ export const checkDevice = query({
 			return {
 				isRegistered: false,
 				isActive: false,
-				message: 'Device not registered',
+				isAdmin: false,
+				message: 'Device not registered. Contact your administrator.',
 			};
 		}
 
 		return {
 			isRegistered: true,
 			isActive: device.isActive,
+			isAdmin: false,
 			deviceName: device.deviceName,
 			location: device.location,
 			deviceType: device.deviceType,
@@ -132,6 +159,7 @@ export const listDevices = query({
 		let devices;
 
 		if (args.location) {
+			// Use type assertion since we've already checked it's not undefined
 			devices = await ctx.db
 				.query('devices')
 				.withIndex('by_location', (q) => q.eq('location', args.location!))
@@ -351,6 +379,7 @@ export const recordDeviceUsage = mutation({
 				updatedAt: Date.now(),
 			});
 		} else {
+			// User doesn't exist - create new record with employee info
 			const employee = await ctx.db
 				.query('employees')
 				.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', clerkUserId))

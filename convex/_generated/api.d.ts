@@ -22,6 +22,7 @@ import type * as clerk from "../clerk.js";
 import type * as compliance from "../compliance.js";
 import type * as complianceEmails from "../complianceEmails.js";
 import type * as dataCleanup from "../dataCleanup.js";
+import type * as devices from "../devices.js";
 import type * as diagnostics from "../diagnostics.js";
 import type * as emails from "../emails.js";
 import type * as emailsSMTP from "../emailsSMTP.js";
@@ -36,6 +37,7 @@ import type * as router from "../router.js";
 import type * as settings from "../settings.js";
 import type * as supervisor from "../supervisor.js";
 import type * as teams from "../teams.js";
+import type * as users from "../users.js";
 
 /**
  * A utility for referencing Convex functions in your app's API.
@@ -55,6 +57,7 @@ declare const fullApi: ApiFromModules<{
   compliance: typeof compliance;
   complianceEmails: typeof complianceEmails;
   dataCleanup: typeof dataCleanup;
+  devices: typeof devices;
   diagnostics: typeof diagnostics;
   emails: typeof emails;
   emailsSMTP: typeof emailsSMTP;
@@ -69,6 +72,7 @@ declare const fullApi: ApiFromModules<{
   settings: typeof settings;
   supervisor: typeof supervisor;
   teams: typeof teams;
+  users: typeof users;
 }>;
 export declare const api: FilterApi<
   typeof fullApi,
