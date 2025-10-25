@@ -54,6 +54,10 @@ const applicationTables = {
 		hasAcceptedInvite: v.optional(v.boolean()),
 		inviteToken: v.optional(v.string()),
 		inviteExpiresAt: v.optional(v.number()),
+		onboardedBy: v.optional(v.string()),
+		onboardedAt: v.optional(v.number()),
+		inviteBounced: v.optional(v.boolean()),
+		inviteResent: v.optional(v.number()),
 	})
 		.index('by_workEmail', ['workEmail'])
 		.index('by_email', ['email'])
