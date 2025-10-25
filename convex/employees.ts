@@ -7,12 +7,29 @@ import {
 	internalMutation,
 } from './_generated/server';
 import {v} from 'convex/values';
-// import {api} from './_generated/api';
 import {internal} from './_generated/api';
-import {
-	// Doc,
-	Id,
-} from './_generated/dataModel';
+import {Id} from './_generated/dataModel';
+
+// Helper to generate a random token
+function generateToken(length = 8) {
+	const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+	let token = '';
+	for (let i = 0; i < length; i++) {
+		token += chars.charAt(Math.floor(Math.random() * chars.length));
+	}
+	return token;
+}
+
+// Helper to generate a random password
+function generatePassword(length = 12) {
+	const chars =
+		'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+';
+	let password = '';
+	for (let i = 0; i < length; i++) {
+		password += chars.charAt(Math.floor(Math.random() * chars.length));
+	}
+	return password;
+}
 
 // Helper: Get user role doc
 async function getUserRoleDoc(ctx: {db: any}, clerkUserId: string) {
@@ -30,7 +47,7 @@ async function audit(
 	details?: string
 ) {
 	await ctx.db.insert('audit_logs', {
-		clerkUserId: clerkUserId, // Pass null directly if clerkUserId is null
+		clerkUserId: clerkUserId,
 		event,
 		timestamp: Date.now(),
 		deviceId: 'system',
@@ -58,6 +75,10 @@ async function requireAdmin(ctx: {db: any}, clerkUserId: string) {
 	return userRole;
 }
 
+// ==============================================================
+// EMPLOYEE QUERIES
+// ===============================================================
+
 // Query: List all employees with mapped fields for frontend (admin only)
 export const listEmployees = query({
 	args: {},
@@ -77,25 +98,355 @@ export const listEmployees = query({
 			phone: emp.phone,
 			role: emp.role,
 			locations: emp.locations || [],
-			employmentStatus: emp.employmentStatus,
 			clerkUserId: emp.clerkUserId,
 			assignedDeviceId: emp.assignedDeviceId,
+			onboardedBy: emp.onboardedBy,
+			onboardedAt: emp.onboardedAt,
+			inviteToken: emp.inviteToken,
+			inviteExpiresAt: emp.inviteExpiresAt,
+			hasAcceptedInvite: emp.hasAcceptedInvite,
+			invitedAt: emp.invitedAt,
+			inviteBounced: emp.inviteBounced,
+			inviteResent: emp.inviteResent,
+			employmentStatus: emp.employmentStatus,
 		}));
 	},
 });
 
-// Helper to generate a random password
-function generatePassword(length = 12) {
-	const chars =
-		'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+';
-	let password = '';
-	for (let i = 0; i < length; i++) {
-		password += chars.charAt(Math.floor(Math.random() * chars.length));
-	}
-	return password;
-}
+// Query: Get available locations (accessible to care staff for resident/guardian management)
+export const getAvailableLocations = query({
+	args: {},
+	handler: async (ctx) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error('Not authenticated');
+		const clerkUserId = identity.subject;
 
-// --- CREATE EMPLOYEE ACTION (admin only) ---
+		// Allow access to care staff and admins
+		const userRole = await getUserRoleDoc(ctx, clerkUserId);
+		if (
+			!userRole ||
+			!['admin', 'supervisor', 'staff'].includes(userRole.role)
+		) {
+			throw new Error('Care access required');
+		}
+
+		// Get active locations from the locations table
+		const locations = await ctx.db.query('locations').collect();
+		const activeLocations = locations
+			.filter((loc) => loc.status === 'active')
+			.map((loc) => loc.name)
+			.sort();
+
+		return activeLocations;
+	},
+});
+
+// Query: Check if authenticated user needs to be linked to employee
+export const checkUserEmployeeLink = query({
+	args: {},
+	handler: async (ctx) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) return null;
+		const clerkUserId = identity.subject;
+
+		// Check if user already has a role
+		const existingRole = await getUserRoleDoc(ctx, clerkUserId);
+		if (existingRole) return null; // User already has role
+
+		// Look for employee record with matching clerkUserId that has accepted invite
+		const employee = await ctx.db
+			.query('employees')
+			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', clerkUserId))
+			.first();
+
+		if (!employee || !employee.hasAcceptedInvite) return null;
+
+		return {
+			employeeId: employee._id,
+			name: employee.name,
+			role: employee.role,
+			locations: employee.locations || [],
+		};
+	},
+});
+
+// Query: Check device authorization
+export const checkDeviceAuthorization = query({
+	args: {
+		clerkUserId: v.string(),
+		deviceId: v.string(),
+	},
+	handler: async (ctx, args) => {
+		const employee = await ctx.db
+			.query('employees')
+			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', args.clerkUserId))
+			.unique();
+
+		if (!employee) {
+			console.log('❌ Employee not found');
+			return {isAuthorized: false, reason: 'Employee not found'};
+		}
+
+		// IF NO DEVICE ASSIGNED (undefined), ALLOW ACCESS (for admins/flexible users)
+		if (!employee.assignedDeviceId) {
+			console.log('✅ No device restriction - access granted');
+			return {isAuthorized: true};
+		}
+
+		// IF DEVICE IS ASSIGNED, CHECK IF IT MATCHES
+		if (employee.assignedDeviceId === args.deviceId) {
+			console.log('✅ Device matches - access granted');
+			return {isAuthorized: true};
+		} else {
+			console.log('❌ Device mismatch - access denied');
+			return {
+				isAuthorized: false,
+				reason: 'Device not assigned to this employee',
+			};
+		}
+	},
+});
+
+// ===============================================================
+// INVITE SYSTEM - QUERIES
+// ==============================================================
+
+// Query: Get invite link for an employee (admin only)
+export const getInviteLink = query({
+	args: {employeeId: v.id('employees')},
+	handler: async (ctx, args) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error('Not authenticated');
+		const clerkUserId = identity.subject;
+
+		await requireAdminQuery(ctx, clerkUserId);
+
+		const employee = await ctx.db.get(args.employeeId);
+		if (!employee || !employee.inviteToken || !employee.inviteExpiresAt)
+			return null;
+		if (employee.hasAcceptedInvite) return null;
+		if (employee.inviteExpiresAt < Date.now()) return null;
+
+		// Build invite URL - use window.location.origin in production
+		const baseUrl = process.env.SITE_URL || 'http://localhost:5173';
+		const inviteUrl = `${baseUrl}/?invite=${employee.inviteToken}`;
+		return {
+			url: inviteUrl,
+			expiresAt: employee.inviteExpiresAt,
+			token: employee.inviteToken,
+		};
+	},
+});
+
+// Query: Get invite details by token (public for invite acceptance)
+export const getInviteDetails = query({
+	args: {token: v.string()},
+	handler: async (ctx, args) => {
+		console.log('Getting invite details for token:', args.token);
+
+		const employee = await ctx.db
+			.query('employees')
+			.withIndex('by_inviteToken', (q) => q.eq('inviteToken', args.token))
+			.unique();
+
+		console.log('Found employee for token:', employee ? employee.name : 'none');
+
+		if (!employee) {
+			console.log('No employee found with token:', args.token);
+			return null;
+		}
+
+		const expired =
+			!employee.inviteExpiresAt || employee.inviteExpiresAt < Date.now();
+		console.log(
+			'Invite expired:',
+			expired,
+			'expiresAt:',
+			employee.inviteExpiresAt
+		);
+
+		return {
+			id: employee._id,
+			name: employee.name,
+			email: employee.email,
+			expired,
+			hasAcceptedInvite: !!employee.hasAcceptedInvite,
+			expiresAt: employee.inviteExpiresAt,
+		};
+	},
+});
+
+// ==================================================================
+// INVITE SYSTEM - MUTATIONS
+// ==================================================================
+
+// NOTE HERE TO ADD
+// Mutation: Generate invite link for an employee (admin only)
+export const generateInviteLink = mutation({
+	args: {employeeId: v.id('employees')},
+	handler: async (ctx, args) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error('Not authenticated');
+		const clerkUserId = identity.subject;
+
+		await requireAdminQuery(ctx, clerkUserId);
+
+		const employee = await ctx.db.get(args.employeeId);
+		if (!employee) throw new Error('Employee not found');
+
+		// Generate a new token and expiry (24h from now)
+		const token = generateToken();
+		const expiresAt = Date.now() + 24 * 60 * 60 * 1000;
+
+		await ctx.db.patch(args.employeeId, {
+			inviteToken: token,
+			inviteExpiresAt: expiresAt,
+			inviteResent: Date.now(),
+			hasAcceptedInvite: false,
+			inviteBounced: false,
+		});
+
+		await audit(
+			ctx,
+			'generate_invite_link',
+			clerkUserId,
+			`employeeId=${args.employeeId}`
+		);
+
+		// Send invite email via Resend
+		try {
+			await ctx.scheduler.runAfter(0, internal.emails.sendInviteEmail, {
+				employeeId: args.employeeId,
+				inviteToken: token,
+			});
+			console.log(
+				'Scheduled invite email for employee:',
+				args.employeeId,
+				'with token:',
+				token
+			);
+		} catch (error) {
+			console.error('Failed to schedule invite email:', error);
+			// Don't throw here, still return the token so admin can manually share
+		}
+
+		return {token, expiresAt};
+	},
+});
+
+// Mutation: Accept invite by token (public for invite acceptance)
+export const acceptInvite = mutation({
+	args: {token: v.string()},
+	handler: async (ctx, args) => {
+		console.log('Accepting invite for token:', args.token);
+
+		const employee = await ctx.db
+			.query('employees')
+			.withIndex('by_inviteToken', (q) => q.eq('inviteToken', args.token))
+			.unique();
+
+		if (!employee) {
+			console.log('No employee found for token:', args.token);
+			throw new Error('Invalid invite token');
+		}
+
+		if (!employee.inviteExpiresAt || employee.inviteExpiresAt < Date.now()) {
+			console.log('Invite expired for employee:', employee.name);
+			throw new Error('Invite expired');
+		}
+
+		if (employee.hasAcceptedInvite) {
+			console.log('Invite already accepted for employee:', employee.name);
+			throw new Error('Invite already accepted');
+		}
+
+		await ctx.db.patch(employee._id, {
+			hasAcceptedInvite: true,
+			employmentStatus: 'active',
+		});
+
+		await audit(
+			ctx,
+			'accept_invite',
+			null,
+			`employeeId=${employee._id},token=${args.token}`
+		);
+
+		console.log('Successfully accepted invite for employee:', employee.name);
+
+		return {
+			success: true,
+			employeeId: employee._id,
+			email: employee.email,
+			role: employee.role,
+			locations: employee.locations || [],
+		};
+	},
+});
+
+// Mutation: Link authenticated Clerk user to employee record and create role
+export const linkUserToEmployee = mutation({
+	args: {employeeId: v.id('employees')},
+	handler: async (ctx, args) => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error('Not authenticated');
+		const clerkUserId = identity.subject;
+
+		const employee = await ctx.db.get(args.employeeId);
+		if (!employee) throw new Error('Employee not found');
+		if (!employee.hasAcceptedInvite)
+			throw new Error('Employee invite not accepted');
+
+		// Check if Clerk user email matches employee email
+		const userEmail = identity.email;
+		if (userEmail !== employee.email && userEmail !== employee.workEmail) {
+			throw new Error('User email does not match employee email');
+		}
+
+		// Check if user already has a role
+		const existingRole = await ctx.db
+			.query('roles')
+			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', clerkUserId))
+			.unique();
+
+		if (existingRole) {
+			throw new Error('User already has a role assigned');
+		}
+
+		// Create role based on employee record
+		const roleToAssign = employee.role || 'staff';
+		const locationsToAssign = employee.locations || [];
+
+		await ctx.db.insert('roles', {
+			clerkUserId,
+			role: roleToAssign,
+			locations: locationsToAssign,
+			assignedAt: Date.now(),
+		});
+
+		// Update employee record with Clerk user link
+		await ctx.db.patch(args.employeeId, {
+			clerkUserId,
+			onboardedBy: clerkUserId,
+			onboardedAt: Date.now(),
+		});
+
+		await audit(
+			ctx,
+			'link_user_to_employee',
+			clerkUserId,
+			`employeeId=${args.employeeId},role=${roleToAssign}`
+		);
+
+		return {success: true, role: roleToAssign, locations: locationsToAssign};
+	},
+});
+
+// ============================================================================
+// EMPLOYEE CRUD - CREATE
+// ============================================================================
+
+// Action: Create employee with Clerk user account (admin only)
 export const createEmployee = action({
 	args: {
 		name: v.string(),
@@ -106,7 +457,7 @@ export const createEmployee = action({
 			v.literal('staff')
 		),
 		locations: v.array(v.string()),
-		assignedDeviceId: v.optional(v.string()), // New argument for assigned device
+		assignedDeviceId: v.optional(v.string()),
 	},
 	handler: async (
 		ctx,
@@ -120,10 +471,6 @@ export const createEmployee = action({
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error('Not authenticated');
 		const adminClerkUserId = identity.subject;
-		// Note: requireAdmin is a mutation helper, actions cannot call mutations directly.
-		// For actions, we need to re-implement the admin check or call an internal query.
-		// For simplicity, we'll assume the frontend ensures admin access for this action.
-		// In a real app, you'd call an internalQuery to check role.
 
 		// Check if employee with this email already exists in Convex
 		const existingEmployee = await ctx.runQuery(
@@ -168,9 +515,9 @@ export const createEmployee = action({
 				workEmail: args.email,
 				role: args.role,
 				locations: args.locations,
-				clerkUserId: clerkUserId, // Link to Clerk user
+				clerkUserId: clerkUserId,
 				adminClerkUserId: adminClerkUserId,
-				assignedDeviceId: args.assignedDeviceId, // Pass assigned device ID
+				assignedDeviceId: args.assignedDeviceId,
 			}
 		);
 
@@ -178,14 +525,13 @@ export const createEmployee = action({
 			clerkUserId: adminClerkUserId,
 			event: 'create_employee',
 			details: `employeeId=${employeeId},clerkUserId=${clerkUserId},role=${args.role},assignedDeviceId=${args.assignedDeviceId || 'none'}`,
-			deviceId: 'system', // Placeholder, will be replaced by actual device ID
-			location: '', // Placeholder, will be replaced by actual location
+			deviceId: 'system',
+			location: '',
 		});
 
 		// Send welcome email with credentials
 		try {
 			await ctx.scheduler.runAfter(0, internal.emails.sendWelcomeEmail, {
-				// Assuming a new email function
 				employeeId: employeeId,
 				email: args.email,
 				password: generatedPassword,
@@ -196,14 +542,13 @@ export const createEmployee = action({
 				'Failed to schedule welcome email for new employee:',
 				error
 			);
-			// Don't throw here, still return success
 		}
 
 		return {
 			success: true,
 			employeeId,
 			clerkUserId: clerkUserId,
-			generatedPassword, // Return password for immediate display if needed (e.g., for testing)
+			generatedPassword,
 		};
 	},
 });
@@ -222,7 +567,7 @@ export const insertEmployeeAndRole = internalMutation({
 		locations: v.array(v.string()),
 		clerkUserId: v.string(),
 		adminClerkUserId: v.string(),
-		assignedDeviceId: v.optional(v.string()), // New argument for assigned device
+		assignedDeviceId: v.optional(v.string()),
 	},
 	handler: async (
 		ctx: MutationCtx,
@@ -245,7 +590,8 @@ export const insertEmployeeAndRole = internalMutation({
 			locations: args.locations,
 			clerkUserId: args.clerkUserId,
 			employmentStatus: 'active',
-			assignedDeviceId: args.assignedDeviceId, // Store assigned device ID
+			assignedDeviceId: args.assignedDeviceId,
+			createdAt: Date.now(),
 		});
 
 		await ctx.db.insert('roles', {
@@ -270,7 +616,11 @@ export const getEmployeeByEmail = internalQuery({
 	},
 });
 
-// --- UPDATE EMPLOYEE MUTATION (admin only) ---
+// ============================================================================
+// EMPLOYEE CRUD - UPDATE
+// ============================================================================
+
+// Mutation: Update employee (admin only)
 export const updateEmployee = mutation({
 	args: {
 		employeeId: v.id('employees'),
@@ -282,7 +632,7 @@ export const updateEmployee = mutation({
 			v.literal('staff')
 		),
 		locations: v.array(v.string()),
-		assignedDeviceId: v.optional(v.string()), // New argument for assigned device
+		assignedDeviceId: v.optional(v.string()),
 	},
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
@@ -300,8 +650,25 @@ export const updateEmployee = mutation({
 			role: args.role,
 			locations: args.locations,
 			updatedAt: Date.now(),
-			assignedDeviceId: args.assignedDeviceId, // Update assigned device ID
+			assignedDeviceId: args.assignedDeviceId,
 		});
+
+		// Update role if employee has clerkUserId
+		if (employee.clerkUserId) {
+			const role = await ctx.db
+				.query('roles')
+				.withIndex('by_clerkUserId', (q) =>
+					q.eq('clerkUserId', employee.clerkUserId!)
+				)
+				.unique();
+
+			if (role) {
+				await ctx.db.patch(role._id, {
+					role: args.role,
+					locations: args.locations,
+				});
+			}
+		}
 
 		await audit(
 			ctx,
@@ -313,7 +680,11 @@ export const updateEmployee = mutation({
 	},
 });
 
-// --- DELETE EMPLOYEE MUTATION (admin only) - CASCADE ---
+// ============================================================================
+// EMPLOYEE CRUD - DELETE
+// ============================================================================
+
+// Mutation: Delete employee with cascade (admin only)
 export const deleteEmployee = mutation({
 	args: {employeeId: v.id('employees')},
 	handler: async (ctx, args) => {
@@ -335,7 +706,7 @@ export const deleteEmployee = mutation({
 			// 1. Delete role record
 			const role = await ctx.db
 				.query('roles')
-				.withIndex('by_clerkUserId', (q: any) =>
+				.withIndex('by_clerkUserId', (q) =>
 					q.eq('clerkUserId', linkedClerkUserId)
 				)
 				.unique();
@@ -393,7 +764,7 @@ export const deleteEmployee = mutation({
 				}
 			}
 
-			// 7. Update compliance_alerts dismissed by this user (set to null)
+			// 7. Update compliance_alerts dismissed by this user (set to undefined)
 			const alerts = await ctx.db.query('compliance_alerts').collect();
 			for (const alert of alerts) {
 				if (alert.dismissedBy === linkedClerkUserId) {
@@ -401,7 +772,7 @@ export const deleteEmployee = mutation({
 				}
 			}
 
-			// 8. Update residents created by this user (set to null)
+			// 8. Update residents created by this user (set to undefined)
 			const residents = await ctx.db
 				.query('residents')
 				.withIndex('by_createdBy', (q) => q.eq('createdBy', linkedClerkUserId))
@@ -410,7 +781,7 @@ export const deleteEmployee = mutation({
 				await ctx.db.patch(resident._id, {createdBy: undefined});
 			}
 
-			// 9. Update guardians created by this user (set to null)
+			// 9. Update guardians created by this user (set to undefined)
 			const guardians = await ctx.db
 				.query('guardians')
 				.withIndex('by_createdBy', (q) => q.eq('createdBy', linkedClerkUserId))
@@ -419,7 +790,7 @@ export const deleteEmployee = mutation({
 				await ctx.db.patch(guardian._id, {createdBy: undefined});
 			}
 
-			// 10. Update kiosks created/registered by this user (set to null)
+			// 10. Update kiosks created/registered by this user (set to undefined)
 			const kiosks = await ctx.db.query('kiosks').collect();
 			for (const kiosk of kiosks) {
 				if (
@@ -433,7 +804,18 @@ export const deleteEmployee = mutation({
 				}
 			}
 
-			// 11. Schedule deletion of the Clerk user account
+			// 11. Delete users table entry if exists
+			const user = await ctx.db
+				.query('users')
+				.withIndex('by_clerkUserId', (q) =>
+					q.eq('clerkUserId', linkedClerkUserId)
+				)
+				.first();
+			if (user) {
+				await ctx.db.delete(user._id);
+			}
+
+			// 12. Schedule deletion of the Clerk user account
 			try {
 				await ctx.scheduler.runAfter(0, internal.clerk.deleteClerkUser, {
 					clerkUserId: linkedClerkUserId,
@@ -441,11 +823,10 @@ export const deleteEmployee = mutation({
 				console.log('Scheduled deletion of Clerk user:', linkedClerkUserId);
 			} catch (error) {
 				console.error('Failed to schedule Clerk user deletion:', error);
-				// Don't throw here, continue with Convex record deletion
 			}
 		}
 
-		// 12. Delete the employee record
+		// 13. Delete the employee record
 		await ctx.db.delete(args.employeeId);
 
 		await audit(
@@ -457,6 +838,10 @@ export const deleteEmployee = mutation({
 		return {success: true};
 	},
 });
+
+// ============================================================================
+// INTERNAL QUERIES FOR EMAIL SYSTEM
+// ============================================================================
 
 // --- INTERNAL QUERY TO GET EMPLOYEE FOR EMAIL ---
 export const getEmployeeForEmail = internalQuery({
@@ -471,42 +856,5 @@ export const getEmployeeForEmail = internalQuery({
 			role: employee.role || 'staff',
 			locations: employee.locations || [],
 		};
-	},
-});
-
-// --- QUERY TO CHECK DEVICE AUTHORIZATION ---
-export const checkDeviceAuthorization = query({
-	args: {
-		clerkUserId: v.string(),
-		deviceId: v.string(),
-	},
-	handler: async (ctx, args) => {
-		const employee = await ctx.db
-			.query('employees')
-			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', args.clerkUserId))
-			.unique();
-
-		if (!employee) {
-			console.log('❌ Employee not found');
-			return {isAuthorized: false, reason: 'Employee not found'};
-		}
-
-		// IF NO DEVICE ASSIGNED (undefined), ALLOW ACCESS (for admins/flexible users)
-		if (!employee.assignedDeviceId) {
-			console.log('✅ No device restriction - access granted');
-			return {isAuthorized: true};
-		}
-
-		// IF DEVICE IS ASSIGNED, CHECK IF IT MATCHES
-		if (employee.assignedDeviceId === args.deviceId) {
-			console.log('✅ Device matches - access granted');
-			return {isAuthorized: true};
-		} else {
-			console.log('❌ Device mismatch - access denied');
-			return {
-				isAuthorized: false,
-				reason: 'Device not assigned to this employee',
-			};
-		}
 	},
 });
