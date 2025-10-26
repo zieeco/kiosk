@@ -84,6 +84,7 @@ export const handleClerkWebhook = internalAction({
 
 /**
  * Create a Clerk user programmatically
+ * Updated to handle username requirement
  */
 export const createClerkUser = internalAction({
 	args: {
@@ -96,11 +97,15 @@ export const createClerkUser = internalAction({
 		try {
 			console.log('🔐 Creating Clerk user:', args.email);
 
+			// Generate username from email (before @ symbol)
+			const username = args.email.split('@')[0].toLowerCase();
+
 			const user = await clerk.users.createUser({
 				emailAddress: [args.email],
 				password: args.password,
 				firstName: args.firstName,
 				lastName: args.lastName,
+				username: username, // ✅ ADD USERNAME
 				skipPasswordChecks: false,
 				skipPasswordRequirement: false,
 			});
@@ -111,8 +116,17 @@ export const createClerkUser = internalAction({
 				clerkUserId: user.id,
 				email: user.emailAddresses[0].emailAddress,
 			};
-		} catch (error) {
+		} catch (error: any) {
 			console.error('❌ Error creating Clerk user:', error);
+
+			// Better error handling
+			if (error.errors) {
+				const errorMessages = error.errors
+					.map((e: any) => e.longMessage || e.message)
+					.join(', ');
+				throw new Error(`Failed to create Clerk user: ${errorMessages}`);
+			}
+
 			throw new Error(
 				`Failed to create Clerk user: ${error instanceof Error ? error.message : String(error)}`
 			);
@@ -145,11 +159,18 @@ export const deleteClerkUser = internalAction({
 /**
  * Get Clerk user by ID
  */
-export const getClerkUserByEmail = internalAction({
+export const getClerkUserById = internalAction({
 	args: {
 		id: v.string(),
 	},
 	handler: async (ctx, args) => {
-		return await clerk.users.getUser(args.id);
+		try {
+			return await clerk.users.getUser(args.id);
+		} catch (error) {
+			console.error('❌ Error getting Clerk user:', error);
+			throw new Error(
+				`Failed to get Clerk user: ${error instanceof Error ? error.message : String(error)}`
+			);
+		}
 	},
 });
