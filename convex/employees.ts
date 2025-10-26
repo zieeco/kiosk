@@ -20,6 +20,11 @@ function generateToken(length = 8) {
 	return token;
 }
 
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
 // Helper to generate a random password
 function generatePassword(length = 12) {
 	const chars =
@@ -75,9 +80,31 @@ async function requireAdmin(ctx: {db: any}, clerkUserId: string) {
 	return userRole;
 }
 
-// ==============================================================
+// ============================================================================
+// ADMIN EXISTENCE CHECK (For SignUp Visibility)
+// ============================================================================
+
+/**
+ * Check if any admin user exists in the system
+ * Used to determine if SignUp should be visible
+ * PUBLIC QUERY - No auth required (for login page)
+ */
+export const hasAdminUser = query({
+	args: {},
+	handler: async (ctx) => {
+		const adminRole = await ctx.db
+			.query('roles')
+			.filter((q) => q.eq(q.field('role'), 'admin'))
+			.first();
+
+		console.log('🔍 hasAdminUser:', adminRole !== null);
+		return adminRole !== null;
+	},
+});
+
+// ============================================================================
 // EMPLOYEE QUERIES
-// ===============================================================
+// ============================================================================
 
 // Query: List all employees with mapped fields for frontend (admin only)
 export const listEmployees = query({
@@ -109,11 +136,12 @@ export const listEmployees = query({
 			inviteBounced: emp.inviteBounced,
 			inviteResent: emp.inviteResent,
 			employmentStatus: emp.employmentStatus,
+			createdAt: emp.createdAt,
 		}));
 	},
 });
 
-// Query: Get available locations (accessible to care staff for resident/guardian management)
+// Query: Get available locations (accessible to care staff)
 export const getAvailableLocations = query({
 	args: {},
 	handler: async (ctx) => {
@@ -282,57 +310,57 @@ export const getInviteDetails = query({
 
 // NOTE HERE TO ADD
 // Mutation: Generate invite link for an employee (admin only)
-export const generateInviteLink = mutation({
-	args: {employeeId: v.id('employees')},
-	handler: async (ctx, args) => {
-		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) throw new Error('Not authenticated');
-		const clerkUserId = identity.subject;
+// export const generateInviteLink = mutation({
+// 	args: {employeeId: v.id('employees')},
+// 	handler: async (ctx, args) => {
+// 		const identity = await ctx.auth.getUserIdentity();
+// 		if (!identity) throw new Error('Not authenticated');
+// 		const clerkUserId = identity.subject;
 
-		await requireAdminQuery(ctx, clerkUserId);
+// 		await requireAdminQuery(ctx, clerkUserId);
 
-		const employee = await ctx.db.get(args.employeeId);
-		if (!employee) throw new Error('Employee not found');
+// 		const employee = await ctx.db.get(args.employeeId);
+// 		if (!employee) throw new Error('Employee not found');
 
-		// Generate a new token and expiry (24h from now)
-		const token = generateToken();
-		const expiresAt = Date.now() + 24 * 60 * 60 * 1000;
+// 		// Generate a new token and expiry (24h from now)
+// 		const token = generateToken();
+// 		const expiresAt = Date.now() + 24 * 60 * 60 * 1000;
 
-		await ctx.db.patch(args.employeeId, {
-			inviteToken: token,
-			inviteExpiresAt: expiresAt,
-			inviteResent: Date.now(),
-			hasAcceptedInvite: false,
-			inviteBounced: false,
-		});
+// 		await ctx.db.patch(args.employeeId, {
+// 			inviteToken: token,
+// 			inviteExpiresAt: expiresAt,
+// 			inviteResent: Date.now(),
+// 			hasAcceptedInvite: false,
+// 			inviteBounced: false,
+// 		});
 
-		await audit(
-			ctx,
-			'generate_invite_link',
-			clerkUserId,
-			`employeeId=${args.employeeId}`
-		);
+// 		await audit(
+// 			ctx,
+// 			'generate_invite_link',
+// 			clerkUserId,
+// 			`employeeId=${args.employeeId}`
+// 		);
 
-		// Send invite email via Resend
-		try {
-			await ctx.scheduler.runAfter(0, internal.emails.sendInviteEmail, {
-				employeeId: args.employeeId,
-				inviteToken: token,
-			});
-			console.log(
-				'Scheduled invite email for employee:',
-				args.employeeId,
-				'with token:',
-				token
-			);
-		} catch (error) {
-			console.error('Failed to schedule invite email:', error);
-			// Don't throw here, still return the token so admin can manually share
-		}
+// 		// Send invite email via Resend
+// 		try {
+// 			await ctx.scheduler.runAfter(0, internal.emails.sendInviteEmail, {
+// 				employeeId: args.employeeId,
+// 				inviteToken: token,
+// 			});
+// 			console.log(
+// 				'Scheduled invite email for employee:',
+// 				args.employeeId,
+// 				'with token:',
+// 				token
+// 			);
+// 		} catch (error) {
+// 			console.error('Failed to schedule invite email:', error);
+// 			// Don't throw here, still return the token so admin can manually share
+// 		}
 
-		return {token, expiresAt};
-	},
-});
+// 		return {token, expiresAt};
+// 	},
+// });
 
 // Mutation: Accept invite by token (public for invite acceptance)
 export const acceptInvite = mutation({
@@ -443,10 +471,13 @@ export const linkUserToEmployee = mutation({
 });
 
 // ============================================================================
-// EMPLOYEE CRUD - CREATE
+// EMPLOYEE CRUD - CREATE (Admin creates account directly)
 // ============================================================================
 
-// Action: Create employee with Clerk user account (admin only)
+/**
+ * Create employee with Clerk account (admin only)
+ * Admin creates the full account - employee receives credentials via email
+ */
 export const createEmployee = action({
 	args: {
 		name: v.string(),
@@ -466,7 +497,7 @@ export const createEmployee = action({
 		success: boolean;
 		employeeId: Id<'employees'>;
 		clerkUserId: string;
-		generatedPassword?: string;
+		generatedPassword: string;
 	}> => {
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error('Not authenticated');
@@ -482,13 +513,15 @@ export const createEmployee = action({
 			throw new Error('Employee with this email already exists');
 		}
 
-		// Generate a random password for the new Clerk user
-		const generatedPassword = generatePassword();
+		// Generate a secure random password
+		const generatedPassword = generatePassword(16); // Longer for security
+
+		console.log('🔐 Creating Clerk user for:', args.email);
 
 		// Create user in Clerk via Convex action
 		let clerkUser;
 		try {
-			clerkUser = await ctx.runAction(internal.clerk.createClerkUser, {
+			clerkUser = await ctx.runAction(internal.clerkActions.createClerkUser, {
 				email: args.email,
 				password: generatedPassword,
 				firstName: args.name.split(' ')[0] || '',
@@ -506,6 +539,8 @@ export const createEmployee = action({
 		}
 		const clerkUserId = clerkUser.clerkUserId;
 
+		console.log('✅ Clerk user created:', clerkUserId);
+
 		// Store employee record in Convex, linked to Clerk user
 		const employeeId = await ctx.runMutation(
 			internal.employees.insertEmployeeAndRole,
@@ -521,6 +556,8 @@ export const createEmployee = action({
 			}
 		);
 
+		console.log('✅ Employee record created:', employeeId);
+
 		await ctx.runMutation(internal.audit.log, {
 			clerkUserId: adminClerkUserId,
 			event: 'create_employee',
@@ -531,24 +568,29 @@ export const createEmployee = action({
 
 		// Send welcome email with credentials
 		try {
-			await ctx.scheduler.runAfter(0, internal.emails.sendWelcomeEmail, {
-				employeeId: employeeId,
-				email: args.email,
-				password: generatedPassword,
-			});
-			console.log('Scheduled welcome email for new employee:', employeeId);
-		} catch (error) {
-			console.error(
-				'Failed to schedule welcome email for new employee:',
-				error
+			await ctx.scheduler.runAfter(
+				0,
+				internal.emails.sendWelcomeEmailWithCredentials,
+				{
+					employeeId: employeeId,
+					email: args.email,
+					password: generatedPassword,
+				}
 			);
+			console.log(
+				'📧 Scheduled welcome email with credentials for:',
+				args.email
+			);
+		} catch (error) {
+			console.error('Failed to schedule welcome email:', error);
+			// Don't throw - account was created successfully
 		}
 
 		return {
 			success: true,
 			employeeId,
 			clerkUserId: clerkUserId,
-			generatedPassword,
+			generatedPassword, // Return for admin to see (optional)
 		};
 	},
 });
@@ -592,6 +634,9 @@ export const insertEmployeeAndRole = internalMutation({
 			employmentStatus: 'active',
 			assignedDeviceId: args.assignedDeviceId,
 			createdAt: Date.now(),
+			createdBy: args.adminClerkUserId,
+			onboardedBy: args.adminClerkUserId,
+			onboardedAt: Date.now(),
 		});
 
 		await ctx.db.insert('roles', {
@@ -601,6 +646,9 @@ export const insertEmployeeAndRole = internalMutation({
 			assignedBy: args.adminClerkUserId,
 			assignedAt: Date.now(),
 		});
+
+		console.log('✅ Employee and role records created');
+
 		return employeeId;
 	},
 });
@@ -611,7 +659,12 @@ export const getEmployeeByEmail = internalQuery({
 	handler: async (ctx, args) => {
 		return await ctx.db
 			.query('employees')
-			.filter((q) => q.eq(q.field('email'), args.email))
+			.filter((q) =>
+				q.or(
+					q.eq(q.field('email'), args.email),
+					q.eq(q.field('workEmail'), args.email)
+				)
+			)
 			.first();
 	},
 });
@@ -647,6 +700,7 @@ export const updateEmployee = mutation({
 		await ctx.db.patch(args.employeeId, {
 			name: args.name,
 			email: args.email,
+			workEmail: args.email,
 			role: args.role,
 			locations: args.locations,
 			updatedAt: Date.now(),
@@ -696,67 +750,51 @@ export const deleteEmployee = mutation({
 		const employee = await ctx.db.get(args.employeeId);
 		if (!employee) throw new Error('Employee not found');
 
-		// CASCADE: Find and delete linked user account and all related data
 		let linkedClerkUserId: string | null = null;
 		if (employee.clerkUserId) {
 			linkedClerkUserId = employee.clerkUserId;
 		}
 
 		if (linkedClerkUserId) {
-			// 1. Delete role record
+			// Delete all related records
 			const role = await ctx.db
 				.query('roles')
 				.withIndex('by_clerkUserId', (q) =>
 					q.eq('clerkUserId', linkedClerkUserId)
 				)
 				.unique();
-			if (role) {
-				await ctx.db.delete(role._id);
-			}
+			if (role) await ctx.db.delete(role._id);
 
-			// 2. Delete all shifts
 			const shifts = await ctx.db
 				.query('shifts')
 				.withIndex('by_clerkUserId', (q) =>
 					q.eq('clerkUserId', linkedClerkUserId)
 				)
 				.collect();
-			for (const shift of shifts) {
-				await ctx.db.delete(shift._id);
-			}
+			for (const shift of shifts) await ctx.db.delete(shift._id);
 
-			// 3. Delete all resident_logs
 			const logs = await ctx.db
 				.query('resident_logs')
 				.withIndex('by_authorId', (q) => q.eq('authorId', linkedClerkUserId))
 				.collect();
-			for (const log of logs) {
-				await ctx.db.delete(log._id);
-			}
+			for (const log of logs) await ctx.db.delete(log._id);
 
-			// 4. Delete all audit_logs
 			const audits = await ctx.db
 				.query('audit_logs')
 				.withIndex('by_clerkUserId', (q) =>
 					q.eq('clerkUserId', linkedClerkUserId)
 				)
 				.collect();
-			for (const auditLog of audits) {
-				await ctx.db.delete(auditLog._id);
-			}
+			for (const auditLog of audits) await ctx.db.delete(auditLog._id);
 
-			// 5. Delete all ISP access logs
 			const ispAccessLogs = await ctx.db
 				.query('isp_access_logs')
 				.withIndex('by_clerkUserId', (q) =>
 					q.eq('clerkUserId', linkedClerkUserId)
 				)
 				.collect();
-			for (const log of ispAccessLogs) {
-				await ctx.db.delete(log._id);
-			}
+			for (const log of ispAccessLogs) await ctx.db.delete(log._id);
 
-			// 6. Delete all ISP acknowledgments
 			const ispAcks = await ctx.db.query('isp_acknowledgments').collect();
 			for (const ack of ispAcks) {
 				if (ack.clerkUserId === linkedClerkUserId) {
@@ -764,7 +802,6 @@ export const deleteEmployee = mutation({
 				}
 			}
 
-			// 7. Update compliance_alerts dismissed by this user (set to undefined)
 			const alerts = await ctx.db.query('compliance_alerts').collect();
 			for (const alert of alerts) {
 				if (alert.dismissedBy === linkedClerkUserId) {
@@ -772,7 +809,6 @@ export const deleteEmployee = mutation({
 				}
 			}
 
-			// 8. Update residents created by this user (set to undefined)
 			const residents = await ctx.db
 				.query('residents')
 				.withIndex('by_createdBy', (q) => q.eq('createdBy', linkedClerkUserId))
@@ -781,7 +817,6 @@ export const deleteEmployee = mutation({
 				await ctx.db.patch(resident._id, {createdBy: undefined});
 			}
 
-			// 9. Update guardians created by this user (set to undefined)
 			const guardians = await ctx.db
 				.query('guardians')
 				.withIndex('by_createdBy', (q) => q.eq('createdBy', linkedClerkUserId))
@@ -790,7 +825,6 @@ export const deleteEmployee = mutation({
 				await ctx.db.patch(guardian._id, {createdBy: undefined});
 			}
 
-			// 10. Update kiosks created/registered by this user (set to undefined)
 			const kiosks = await ctx.db.query('kiosks').collect();
 			for (const kiosk of kiosks) {
 				if (
@@ -804,20 +838,17 @@ export const deleteEmployee = mutation({
 				}
 			}
 
-			// 11. Delete users table entry if exists
 			const user = await ctx.db
 				.query('users')
 				.withIndex('by_clerkUserId', (q) =>
 					q.eq('clerkUserId', linkedClerkUserId)
 				)
 				.first();
-			if (user) {
-				await ctx.db.delete(user._id);
-			}
+			if (user) await ctx.db.delete(user._id);
 
-			// 12. Schedule deletion of the Clerk user account
+			// Schedule deletion of Clerk user account
 			try {
-				await ctx.scheduler.runAfter(0, internal.clerk.deleteClerkUser, {
+				await ctx.scheduler.runAfter(0, internal.clerkActions.deleteClerkUser, {
 					clerkUserId: linkedClerkUserId,
 				});
 				console.log('Scheduled deletion of Clerk user:', linkedClerkUserId);
@@ -826,7 +857,7 @@ export const deleteEmployee = mutation({
 			}
 		}
 
-		// 13. Delete the employee record
+		// Delete the employee record
 		await ctx.db.delete(args.employeeId);
 
 		await audit(
@@ -843,7 +874,7 @@ export const deleteEmployee = mutation({
 // INTERNAL QUERIES FOR EMAIL SYSTEM
 // ============================================================================
 
-// --- INTERNAL QUERY TO GET EMPLOYEE FOR EMAIL ---
+// Internal query to get employee for email
 export const getEmployeeForEmail = internalQuery({
 	args: {employeeId: v.id('employees')},
 	handler: async (ctx, args) => {
