@@ -16,9 +16,11 @@ import type {
 import type * as access from "../access.js";
 import type * as admin from "../admin.js";
 import type * as audit from "../audit.js";
+import type * as auth from "../auth.js";
 import type * as care from "../care.js";
 import type * as cleanup from "../cleanup.js";
 import type * as clerk from "../clerk.js";
+import type * as clerkActions from "../clerkActions.js";
 import type * as compliance from "../compliance.js";
 import type * as complianceEmails from "../complianceEmails.js";
 import type * as dataCleanup from "../dataCleanup.js";
@@ -51,9 +53,11 @@ declare const fullApi: ApiFromModules<{
   access: typeof access;
   admin: typeof admin;
   audit: typeof audit;
+  auth: typeof auth;
   care: typeof care;
   cleanup: typeof cleanup;
   clerk: typeof clerk;
+  clerkActions: typeof clerkActions;
   compliance: typeof compliance;
   complianceEmails: typeof complianceEmails;
   dataCleanup: typeof dataCleanup;

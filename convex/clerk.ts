@@ -1,125 +1,177 @@
-'use node';
-import {internalAction} from './_generated/server'; // Added internalAction
+// NO 'use node' here!
+import {internalMutation} from './_generated/server';
 import {v} from 'convex/values';
-import {createClerkClient} from '@clerk/backend'; // Named import of the function
-import {Webhook} from 'svix'; // Import Svix
-// import { WebhookEvent } from "svix"; // WebhookEvent is not exported directly from svix
-// Using 'any' for msg type for now to unblock TypeScript errors
 
-const clerk = createClerkClient({
-	secretKey: process.env.CLERK_SECRET_KEY,
-});
-
-// Internal action to handle Clerk webhooks
-export const handleClerkWebhook = internalAction({
+/**
+ * Internal mutation: Sync user from Clerk to Convex
+ */
+export const syncUserFromClerk = internalMutation({
 	args: {
-		payload: v.string(),
-		headers: v.object({
-			svix_id: v.string(), // Changed from "svix-id" to svix_id
-			svix_timestamp: v.string(), // Changed from "svix-timestamp" to svix_timestamp
-			svix_signature: v.string(), // Changed from "svix-signature" to svix_signature
-		}),
+		clerkUserId: v.string(),
+		email: v.string(),
+		name: v.string(),
+		createdAt: v.number(),
 	},
 	handler: async (ctx, args) => {
-		const webhookSecret = process.env.CLERK_WEBHOOK_SECRET;
-		if (!webhookSecret) {
-			throw new Error(
-				'CLERK_WEBHOOK_SECRET is not set in environment variables.'
-			);
+		console.log('🔄 Syncing user to Convex:', args.clerkUserId, args.email);
+
+		// Check if user already exists
+		const existingUser = await ctx.db
+			.query('users')
+			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', args.clerkUserId))
+			.first();
+
+		if (existingUser) {
+			console.log('ℹ️  User already exists, skipping sync');
+			return {alreadyExists: true};
 		}
 
-		const wh = new Webhook(webhookSecret);
-		let msg: any; // Using 'any' for msg type for now
-		try {
-			msg = wh.verify(args.payload, args.headers);
-		} catch (err) {
-			console.error('Error verifying webhook:', err);
-			throw new Error('Invalid webhook signature');
+		// Create user record
+		await ctx.db.insert('users', {
+			clerkUserId: args.clerkUserId,
+			email: args.email,
+			name: args.name,
+			createdAt: args.createdAt,
+		});
+
+		console.log('✅ User record created');
+
+		// Check if this is the first user (should become admin)
+		const existingAdmins = await ctx.db
+			.query('roles')
+			.filter((q) => q.eq(q.field('role'), 'admin'))
+			.collect();
+
+		const isFirstUser = existingAdmins.length === 0;
+
+		if (isFirstUser) {
+			console.log('🎖️  First user detected - creating admin account');
+
+			await ctx.db.insert('employees', {
+				name: args.name,
+				workEmail: args.email,
+				email: args.email,
+				clerkUserId: args.clerkUserId,
+				role: 'admin',
+				locations: [],
+				employmentStatus: 'active',
+				createdAt: Date.now(),
+				onboardedAt: Date.now(),
+			});
+
+			await ctx.db.insert('roles', {
+				clerkUserId: args.clerkUserId,
+				role: 'admin',
+				locations: [],
+				assignedAt: Date.now(),
+			});
+
+			console.log('✅ First admin created automatically!');
+			return {isFirstAdmin: true};
+		} else {
+			console.log('👤 Creating pending employee record');
+
+			await ctx.db.insert('employees', {
+				name: args.name,
+				workEmail: args.email,
+				email: args.email,
+				clerkUserId: args.clerkUserId,
+				role: 'staff',
+				locations: [],
+				employmentStatus: 'pending',
+				createdAt: Date.now(),
+			});
+
+			console.log('✅ Pending employee created - awaiting admin assignment');
+			return {isPending: true};
+		}
+	},
+});
+
+/**
+ * Internal mutation: Update user from Clerk
+ */
+export const updateUserFromClerk = internalMutation({
+	args: {
+		clerkUserId: v.string(),
+		email: v.string(),
+		name: v.string(),
+	},
+	handler: async (ctx, args) => {
+		console.log('🔄 Updating user:', args.clerkUserId);
+
+		const user = await ctx.db
+			.query('users')
+			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', args.clerkUserId))
+			.first();
+
+		if (user) {
+			await ctx.db.patch(user._id, {
+				email: args.email,
+				name: args.name,
+				updatedAt: Date.now(),
+			});
 		}
 
-		// Process the webhook event
-		const eventType = msg.type;
-		switch (eventType) {
-			case 'user.created':
-				console.log('Clerk user created:', msg.data.id);
-				// Here you would typically sync user data to your Convex 'users' or 'employees' table
-				// For now, just log it.
-				break;
-			case 'user.deleted':
-				console.log('Clerk user deleted:', msg.data.id);
-				// Here you would typically delete user data from your Convex tables
-				break;
-			// Add more cases for other event types as needed (e.g., user.updated)
-			default:
-				console.log('Unhandled Clerk webhook event type:', eventType);
-				break;
+		const employee = await ctx.db
+			.query('employees')
+			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', args.clerkUserId))
+			.first();
+
+		if (employee) {
+			await ctx.db.patch(employee._id, {
+				name: args.name,
+				email: args.email,
+				workEmail: args.email,
+				updatedAt: Date.now(),
+			});
 		}
 
+		console.log('✅ User updated');
 		return {success: true};
 	},
 });
 
 /**
- * Note: We DON'T create Clerk users programmatically in the invite-based flow
- *
- * The employee creates their own account through Clerk's signup flow after
- * accepting the invite. This is more secure and follows best practices.
- *
- * However, if you need programmatic user creation (legacy approach),
- * here's the function for reference:
+ * Internal mutation: Delete user from Clerk
  */
-
-/**
- * Create a Clerk user account (NOT USED in invite-based flow)
- * Keeping this for reference or legacy support
- */
-export const createClerkUser = internalAction({
-	// Changed to internalAction
-	args: {
-		email: v.string(),
-		password: v.string(),
-		firstName: v.string(),
-		lastName: v.string(),
-	},
-	handler: async (ctx, args) => {
-		try {
-			const user = await clerk.users.createUser({
-				emailAddress: [args.email],
-				password: args.password,
-				firstName: args.firstName,
-				lastName: args.lastName,
-				skipPasswordChecks: false, // Temporarily skip for initial setup, consider removing in production
-				skipPasswordRequirement: false,
-			});
-			return {clerkUserId: user.id, email: user.emailAddresses[0].emailAddress};
-		} catch (error) {
-			console.error('Error creating Clerk user:', error);
-			throw new Error(
-				`Failed to create Clerk user: ${error instanceof Error ? error.message : String(error)}`
-			);
-		}
-	},
-});
-
-/**
- * Delete a Clerk user account
- * Called internally when admin deletes an employee
- * Note: This requires CLERK_SECRET_KEY environment variable
- */
-export const deleteClerkUser = internalAction({
-	// Changed to internalAction
+export const deleteUserFromClerk = internalMutation({
 	args: {
 		clerkUserId: v.string(),
 	},
 	handler: async (ctx, args) => {
-		try {
-			await clerk.users.deleteUser(args.clerkUserId);
-			return {success: true};
-		} catch (error) {
-			console.error('Error deleting Clerk user:', error);
-			throw new Error(
-				`Failed to delete Clerk user: ${error instanceof Error ? error.message : String(error)}`
-			);
+		console.log('🗑️  Deleting user from Convex:', args.clerkUserId);
+
+		const user = await ctx.db
+			.query('users')
+			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', args.clerkUserId))
+			.first();
+
+		if (user) {
+			await ctx.db.delete(user._id);
+			console.log('✅ User record deleted');
 		}
+
+		const employee = await ctx.db
+			.query('employees')
+			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', args.clerkUserId))
+			.first();
+
+		if (employee) {
+			await ctx.db.delete(employee._id);
+			console.log('✅ Employee record deleted');
+		}
+
+		const role = await ctx.db
+			.query('roles')
+			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', args.clerkUserId))
+			.first();
+
+		if (role) {
+			await ctx.db.delete(role._id);
+			console.log('✅ Role record deleted');
+		}
+
+		return {success: true};
 	},
 });

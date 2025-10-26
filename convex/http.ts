@@ -1,33 +1,66 @@
-import { httpRouter } from "convex/server";
-import { httpAction } from "./_generated/server";
-import { api, internal } from "./_generated/api"; // Import api and internal to reference internal actions
+import {httpRouter} from 'convex/server';
+import {httpAction} from './_generated/server';
+import {internal} from './_generated/api';
 
 const http = httpRouter();
 
-// Define HTTP endpoints
+/**
+ * Clerk Webhook Endpoint
+ * Configure in Clerk Dashboard → Webhooks:
+ * - URL: https://your-deployment.convex.site/clerk-webhook
+ * - Events: user.created, user.updated, user.deleted
+ */
 http.route({
-  path: "/clerk",
-  method: "POST",
-  handler: httpAction(async (ctx, request) => {
-    const payloadString = await request.text();
-    const header = request.headers.get("svix-id")!;
-    const timestamp = request.headers.get("svix-timestamp")!;
-    const signature = request.headers.get("svix-signature")!;
+	path: '/clerk-webhook',
+	method: 'POST',
+	handler: httpAction(async (ctx, request) => {
+		// Get headers
+		const svix_id = request.headers.get('svix-id');
+		const svix_timestamp = request.headers.get('svix-timestamp');
+		const svix_signature = request.headers.get('svix-signature');
 
-    // Call the internal action to handle the webhook
-    await (ctx as any).runAction(internal.clerk.handleClerkWebhook, { // Corrected to internal.clerk.handleClerkWebhook
-      payload: payloadString,
-      headers: {
-        svix_id: header, // Changed from "svix-id" to svix_id
-        svix_timestamp: timestamp, // Changed from "svix-timestamp" to svix_timestamp
-        svix_signature: signature, // Changed from "svix-signature" to svix_signature
-      },
-    });
+		if (!svix_id || !svix_timestamp || !svix_signature) {
+			return new Response('Missing svix headers', {status: 400});
+		}
 
-    return new Response(null, {
-      status: 200,
-    });
-  }),
+		// Get the raw body
+		const payload = await request.text();
+
+		console.log('📨 Received webhook request');
+
+		try {
+			// Call internal action to process webhook
+			await ctx.runAction(internal.clerkActions.handleClerkWebhook, {
+				payload,
+				headers: {
+					svix_id,
+					svix_timestamp,
+					svix_signature,
+				},
+			});
+
+			console.log('✅ Webhook processed successfully');
+
+			return new Response(JSON.stringify({success: true}), {
+				status: 200,
+				headers: {'Content-Type': 'application/json'},
+			});
+		} catch (error) {
+			console.error('❌ Webhook processing failed:', error);
+			return new Response(
+				JSON.stringify({
+					error:
+						error instanceof Error
+							? error.message
+							: 'Webhook processing failed',
+				}),
+				{
+					status: 500,
+					headers: {'Content-Type': 'application/json'},
+				}
+			);
+		}
+	}),
 });
 
 export default http;
