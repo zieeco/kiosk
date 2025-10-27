@@ -19,11 +19,6 @@ function generateToken(length = 8) {
 	return token;
 }
 
-
-// ============================================================================
-// HELPER FUNCTIONS
-// ============================================================================
-
 // Helper to generate a random password
 function generatePassword(length = 12) {
 	const chars =
@@ -474,8 +469,8 @@ export const linkUserToEmployee = mutation({
 
 /**
  * Create employee with Clerk account (admin only)
- * ✅ FIXED: No longer creates employee record directly
- * ✅ Webhook handles ALL record creation after Clerk user is made
+ * ✅ WEBHOOK-FIRST APPROACH: Webhook handles ALL record creation
+ * ✅ This action only creates Clerk user and waits for webhook to sync
  */
 export const createEmployee = action({
 	args: {
@@ -516,7 +511,7 @@ export const createEmployee = action({
 
 		console.log('🔐 Creating Clerk user for:', args.email);
 
-		// ✅ KEY FIX: Create Clerk user with metadata
+		// ✅ STEP 1: Create Clerk user with metadata
 		// Webhook will automatically create employee/role records
 		let clerkUser;
 		try {
@@ -543,40 +538,78 @@ export const createEmployee = action({
 
 		console.log('✅ Clerk user created:', clerkUserId);
 
-		// ✅ CREATE EMPLOYEE DIRECTLY (Don't wait for webhook)
-		// Webhook will update if needed, but we create now for immediate email sending
-		const employeeId = await ctx.runMutation(
-			internal.employees.insertEmployeeAndRole,
-			{
-				name: args.name,
-				email: args.email,
-				workEmail: args.email,
-				role: args.role,
-				locations: args.locations,
-				clerkUserId: clerkUserId,
-				adminClerkUserId: adminClerkUserId,
-				assignedDeviceId: args.assignedDeviceId,
+		// ✅ STEP 2: Wait for webhook to create employee record
+		// Poll for employee record (with timeout)
+		console.log('⏳ Waiting for webhook to create employee record...');
+		let employee;
+		let attempts = 0;
+		const maxAttempts = 15; // 15 seconds max wait time
+
+		while (attempts < maxAttempts) {
+			employee = await ctx.runQuery(
+				internal.employees.getEmployeeByClerkUserId,
+				{clerkUserId}
+			);
+
+			if (employee) {
+				console.log('✅ Webhook successfully created employee record');
+				break;
 			}
-		);
 
-		console.log('✅ Employee record created:', employeeId);
+			// Wait 1 second before next attempt
+			await new Promise((resolve) => setTimeout(resolve, 1000));
+			attempts++;
+			console.log(`⏳ Attempt ${attempts}/${maxAttempts}...`);
+		}
 
-		// Log audit
+		// ✅ STEP 3: If webhook didn't create record, create it manually as fallback
+		if (!employee) {
+			console.warn(
+				'⚠️  Webhook did not create employee record in time, creating manually as fallback'
+			);
+			const employeeId = await ctx.runMutation(
+				internal.employees.insertEmployeeAndRole,
+				{
+					name: args.name,
+					email: args.email,
+					workEmail: args.email,
+					role: args.role,
+					locations: args.locations,
+					clerkUserId: clerkUserId,
+					adminClerkUserId: adminClerkUserId,
+					assignedDeviceId: args.assignedDeviceId,
+				}
+			);
+
+			// Fetch the newly created employee
+			employee = await ctx.runQuery(
+				internal.employees.getEmployeeByClerkUserId,
+				{clerkUserId}
+			);
+
+			if (!employee) {
+				throw new Error('Failed to create employee record');
+			}
+
+			console.log('✅ Fallback: Employee record created manually:', employeeId);
+		}
+
+		// ✅ STEP 4: Log audit
 		await ctx.runMutation(internal.audit.log, {
 			clerkUserId: adminClerkUserId,
 			event: 'create_employee',
-			details: `employeeId=${employeeId},clerkUserId=${clerkUserId},role=${args.role},assignedDeviceId=${args.assignedDeviceId || 'none'}`,
+			details: `employeeId=${employee._id},clerkUserId=${clerkUserId},role=${args.role},assignedDeviceId=${args.assignedDeviceId || 'none'}`,
 			deviceId: 'system',
 			location: '',
 		});
 
-		// Send welcome email with credentials
+		// ✅ STEP 5: Send welcome email with credentials
 		try {
 			await ctx.scheduler.runAfter(
 				0,
 				internal.emails.sendWelcomeEmailWithCredentials,
 				{
-					employeeId: employeeId,
+					employeeId: employee._id,
 					email: args.email,
 					password: generatedPassword,
 				}
@@ -598,7 +631,7 @@ export const createEmployee = action({
 	},
 });
 
-// Internal mutation to insert employee and role (called by createEmployee action)
+// Internal mutation to insert employee and role (called by createEmployee action as fallback)
 export const insertEmployeeAndRole = internalMutation({
 	args: {
 		name: v.string(),
@@ -615,6 +648,18 @@ export const insertEmployeeAndRole = internalMutation({
 		assignedDeviceId: v.optional(v.string()),
 	},
 	handler: async (ctx, args) => {
+		// Check if employee already exists (avoid duplicates)
+		const existingEmployee = await ctx.db
+			.query('employees')
+			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', args.clerkUserId))
+			.first();
+
+		if (existingEmployee) {
+			console.log('ℹ️  Employee already exists, skipping creation');
+			return existingEmployee._id;
+		}
+
+		// Create employee record
 		const employeeId = await ctx.db.insert('employees', {
 			name: args.name,
 			email: args.email,
@@ -630,13 +675,21 @@ export const insertEmployeeAndRole = internalMutation({
 			onboardedAt: Date.now(),
 		});
 
-		await ctx.db.insert('roles', {
-			clerkUserId: args.clerkUserId,
-			role: args.role,
-			locations: args.locations,
-			assignedBy: args.adminClerkUserId,
-			assignedAt: Date.now(),
-		});
+		// Check if role already exists (avoid duplicates)
+		const existingRole = await ctx.db
+			.query('roles')
+			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', args.clerkUserId))
+			.first();
+
+		if (!existingRole) {
+			await ctx.db.insert('roles', {
+				clerkUserId: args.clerkUserId,
+				role: args.role,
+				locations: args.locations,
+				assignedBy: args.adminClerkUserId,
+				assignedAt: Date.now(),
+			});
+		}
 
 		console.log('✅ Employee and role records created');
 
