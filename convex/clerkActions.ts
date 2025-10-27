@@ -1,3 +1,4 @@
+/* eslint-disable no-case-declarations */
 'use node';
 import {internalAction} from './_generated/server';
 import {v} from 'convex/values';
@@ -45,6 +46,10 @@ export const handleClerkWebhook = internalAction({
 		switch (eventType) {
 			case 'user.created':
 				console.log('👤 User created:', userData.id);
+
+				// Extract metadata from Clerk user
+				const metadata = userData.public_metadata || {};
+
 				await ctx.runMutation(internal.clerk.syncUserFromClerk, {
 					clerkUserId: userData.id,
 					email: userData.email_addresses?.[0]?.email_address || '',
@@ -52,17 +57,27 @@ export const handleClerkWebhook = internalAction({
 						`${userData.first_name || ''} ${userData.last_name || ''}`.trim() ||
 						'User',
 					createdAt: userData.created_at,
+					// Pass metadata for employee creation
+					role: metadata.role || 'staff',
+					locations: metadata.locations || [],
+					assignedDeviceId: metadata.assignedDeviceId,
 				});
 				break;
 
 			case 'user.updated':
 				console.log('🔄 User updated:', userData.id);
+
+				const updateMetadata = userData.public_metadata || {};
+
 				await ctx.runMutation(internal.clerk.updateUserFromClerk, {
 					clerkUserId: userData.id,
 					email: userData.email_addresses?.[0]?.email_address || '',
 					name:
 						`${userData.first_name || ''} ${userData.last_name || ''}`.trim() ||
 						'User',
+					role: updateMetadata.role,
+					locations: updateMetadata.locations,
+					assignedDeviceId: updateMetadata.assignedDeviceId,
 				});
 				break;
 
@@ -83,8 +98,8 @@ export const handleClerkWebhook = internalAction({
 });
 
 /**
- * Create a Clerk user programmatically
- * Updated to handle username requirement
+ * Create a Clerk user programmatically with metadata
+ * ✅ FIXED: Now stores role/locations/device in Clerk metadata
  */
 export const createClerkUser = internalAction({
 	args: {
@@ -92,6 +107,13 @@ export const createClerkUser = internalAction({
 		password: v.string(),
 		firstName: v.string(),
 		lastName: v.string(),
+		role: v.union(
+			v.literal('admin'),
+			v.literal('supervisor'),
+			v.literal('staff')
+		),
+		locations: v.array(v.string()) || [],
+		assignedDeviceId: v.optional(v.string()) || undefined,
 	},
 	handler: async (ctx, args) => {
 		try {
@@ -100,17 +122,25 @@ export const createClerkUser = internalAction({
 			// Generate username from email (before @ symbol)
 			const username = args.email.split('@')[0].toLowerCase();
 
+			// ✅ KEY FIX: Store role/locations/device in Clerk metadata
 			const user = await clerk.users.createUser({
 				emailAddress: [args.email],
 				password: args.password,
 				firstName: args.firstName,
 				lastName: args.lastName,
-				username: username, // ✅ ADD USERNAME
+				username: username,
 				skipPasswordChecks: false,
 				skipPasswordRequirement: false,
+				// ✅ CRITICAL: Store all employee data in Clerk
+				publicMetadata: {
+					role: args.role,
+					locations: args.locations,
+					assignedDeviceId: args.assignedDeviceId,
+					systemRole: 'employee',
+				},
 			});
 
-			console.log('✅ Clerk user created:', user.id);
+			console.log('✅ Clerk user created with metadata:', user.id);
 
 			return {
 				clerkUserId: user.id,
@@ -119,7 +149,6 @@ export const createClerkUser = internalAction({
 		} catch (error: any) {
 			console.error('❌ Error creating Clerk user:', error);
 
-			// Better error handling
 			if (error.errors) {
 				const errorMessages = error.errors
 					.map((e: any) => e.longMessage || e.message)
@@ -157,7 +186,7 @@ export const deleteClerkUser = internalAction({
 });
 
 /**
- * Get Clerk user by ID
+ * Get Clerk user by ID with metadata
  */
 export const getClerkUserById = internalAction({
 	args: {
@@ -165,11 +194,55 @@ export const getClerkUserById = internalAction({
 	},
 	handler: async (ctx, args) => {
 		try {
-			return await clerk.users.getUser(args.id);
+			const user = await clerk.users.getUser(args.id);
+			return {
+				id: user.id,
+				email: user.emailAddresses[0]?.emailAddress,
+				name: `${user.firstName || ''} ${user.lastName || ''}`.trim(),
+				metadata: user.publicMetadata,
+			};
 		} catch (error) {
 			console.error('❌ Error getting Clerk user:', error);
 			throw new Error(
 				`Failed to get Clerk user: ${error instanceof Error ? error.message : String(error)}`
+			);
+		}
+	},
+});
+
+/**
+ * Update Clerk user metadata (for keeping role/locations in sync)
+ */
+export const updateClerkMetadata = internalAction({
+	args: {
+		clerkUserId: v.string(),
+		role: v.union(
+			v.literal('admin'),
+			v.literal('supervisor'),
+			v.literal('staff')
+		),
+		locations: v.array(v.string()) || [],
+		assignedDeviceId: v.optional(v.string()) || undefined,
+	},
+	handler: async (ctx, args) => {
+		try {
+			console.log('🔄 Updating Clerk metadata for:', args.clerkUserId);
+
+			await clerk.users.updateUserMetadata(args.clerkUserId, {
+				publicMetadata: {
+					role: args.role,
+					locations: args.locations,
+					assignedDeviceId: args.assignedDeviceId,
+					systemRole: 'employee',
+				},
+			});
+
+			console.log('✅ Clerk metadata updated');
+			return {success: true};
+		} catch (error) {
+			console.error('❌ Error updating Clerk metadata:', error);
+			throw new Error(
+				`Failed to update Clerk metadata: ${error instanceof Error ? error.message : String(error)}`
 			);
 		}
 	},
