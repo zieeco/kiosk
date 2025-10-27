@@ -1,100 +1,9 @@
-// signin.tsx and app.tsx
-'use client';
-import {SignIn} from '@clerk/clerk-react';
-import {useQuery} from 'convex/react';
-import {api} from '../convex/_generated/api';
-
-export function SignInForm() {
-	// Check if admin exists - NO AUTH REQUIRED (public query)
-	const hasAdmin = useQuery(api.employees.hasAdminUser);
-
-	// Show loading while checking
-	if (hasAdmin === undefined) {
-		return (
-			<div className="w-full min-h-screen bg-[rgb(248_250_252)] dark:bg-neutral-950 px-4 py-10 flex items-center justify-center">
-				<div className="text-center">
-					<div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-					<p className="text-gray-600">Loading...</p>
-				</div>
-			</div>
-		);
-	}
-
-	return (
-		<div className="w-full min-h-screen bg-[rgb(248_250_252)] dark:bg-neutral-950 px-4 py-10 flex items-center justify-center">
-			{/* Centered, reduced-width container */}
-			<div className="mx-auto w-full max-w-[440px] sm:max-w-[480px] md:max-w-[520px] lg:max-w-[560px] bg-white/95 dark:bg-neutral-900/95 border border-gray-200 dark:border-neutral-800 rounded-2xl shadow-lg p-6 sm:p-7 md:p-8">
-				{/* Logo Section */}
-				<div className="flex justify-center mb-4">
-					<img
-						src="/logo.png"
-						alt="El-Elyon Properties LLC Logo"
-						className="h-16 w-auto"
-						onError={(e) => {
-							e.currentTarget.style.display = 'none';
-							e.currentTarget.nextElementSibling?.classList.remove('hidden');
-						}}
-					/>
-					<div className="text-3xl font-bold hidden">
-						<span className="text-black">El-Elyon</span>
-						<span className="text-blue-600"> Properties LLC</span>
-					</div>
-				</div>
-
-				{/* 
-					CONDITIONAL SIGNUP:
-					- If NO admin exists → Show SignIn WITH SignUp option (for first admin)
-					- If admin exists → Show SignIn ONLY (no signup for employees)
-				*/}
-				<SignIn
-					routing="hash"
-					signUpUrl={hasAdmin ? undefined : '/sign-up'} // ← KEY LINE: Conditional signup
-				/>
-
-				{/* Info Message for Employees */}
-				{hasAdmin && (
-					<div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-						<p className="text-sm text-blue-800 text-center">
-							<strong>Employee?</strong> Please use the credentials provided by
-							your administrator.
-						</p>
-					</div>
-				)}
-
-				{/* Info Message for First Admin */}
-				{!hasAdmin && (
-					<div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-lg">
-						<p className="text-sm text-green-800 text-center">
-							<strong>First Time Setup:</strong> Create the first admin account
-							to get started.
-						</p>
-					</div>
-				)}
-
-				{/* Footer */}
-				<div className="mt-6 text-center">
-					<p className="text-xs text-gray-500">
-						powered by{' '}
-						<span className="font-semibold text-gray-700">
-							Bold Ideas Innovations Ltd
-						</span>
-					</p>
-				</div>
-			</div>
-		</div>
-	);
-}
-
-
-
-
-// app.tsx
 /* eslint-disable react-hooks/rules-of-hooks */
 import {useQuery, useMutation, useAction} from 'convex/react';
 import {SignIn, SignedIn, SignedOut} from '@clerk/clerk-react';
 import {useUser} from '@clerk/clerk-react';
 import {api} from '../convex/_generated/api';
-import {Toaster, toast} from 'sonner'; // Added toast import
+import {Toaster, toast} from 'sonner';
 import KioskSession from './KioskSession';
 import GuardianChecklistPublic from './components/GuardianChecklistPublic';
 import AccessControl from './components/AccessControl';
@@ -234,40 +143,47 @@ function AuthenticatedApp({
 	// 🆕 SELF-HEALING AUTH - Auto-sync user if missing from database
 	// ============================================================================
 	const [syncAttempted, setSyncAttempted] = useState(false);
+	const [syncInProgress, setSyncInProgress] = useState(false);
 	const userCheck = useQuery(api.auth.ensureUserExists);
-	const autoSync = useMutation(api.auth.autoSyncUser);
+	const autoSync = useAction(api.auth.autoSyncUser);
 
 	// Auto-sync user if they don't exist in database
 	useEffect(() => {
-		if (userCheck && userCheck.needsSync && !syncAttempted) {
+		if (userCheck && userCheck.needsSync && !syncAttempted && !syncInProgress) {
 			console.log('🔄 Auto-syncing user to database...');
 			setSyncAttempted(true);
+			setSyncInProgress(true);
 
 			autoSync()
 				.then((result) => {
 					console.log('✅ User synced:', result);
+					setSyncInProgress(false);
 					if (result.isFirstAdmin) {
 						toast.success('Welcome! You are the first admin.');
+					} else {
+						toast.success('Account restored successfully!');
 					}
 				})
 				.catch((error) => {
 					console.error('❌ Auto-sync failed:', error);
+					setSyncInProgress(false);
 					toast.error('Failed to sync user. Please refresh the page.');
 				});
 		}
-	}, [userCheck, syncAttempted, autoSync]);
+	}, [userCheck, syncAttempted, syncInProgress, autoSync]);
 	// ============================================================================
 
 	// Get session info and device authorization
 	const sessionInfo = useQuery(api.access.getSessionInfo);
 	const role = useQuery(api.settings.getUserRole);
 
-	// Use our new devices.checkDevice query for device validation
+	// Use devices.checkDevice query for device validation
 	const deviceCheck = useQuery(api.devices.checkDevice, {deviceId});
 
 	// Record device usage when user logs in successfully
 	const recordUsage = useMutation(api.devices.recordDeviceUsage);
-
+	const currentUser = useQuery(api.users.getCurrentUser);
+	
 	// Debug logging
 	useEffect(() => {
 		if (user?.id) {
@@ -276,13 +192,19 @@ function AuthenticatedApp({
 			console.log('💻 Device ID:', deviceId);
 			console.log('🔑 Role:', role);
 			console.log('📱 Device Check:', deviceCheck);
-			console.log('🔍 User Check:', userCheck); // Added
+			console.log('🔍 User Check:', userCheck);
+			console.log('Current User:', currentUser);
 		}
-	}, [user, deviceId, role, deviceCheck, userCheck]);
+	}, [user, deviceId, role, deviceCheck, userCheck, currentUser]);
 
 	// Record device usage when authentication is successful
 	useEffect(() => {
-		if (user?.id && deviceCheck?.isRegistered && deviceCheck?.isActive) {
+		if (
+			user?.id &&
+			deviceCheck?.isRegistered &&
+			deviceCheck?.isActive &&
+			!syncInProgress
+		) {
 			recordUsage({deviceId}).catch((error) => {
 				console.error('Failed to record device usage:', error);
 			});
@@ -293,6 +215,7 @@ function AuthenticatedApp({
 		deviceCheck?.isActive,
 		deviceId,
 		recordUsage,
+		syncInProgress,
 	]);
 
 	// Handle automatic routing based on user role
@@ -305,11 +228,12 @@ function AuthenticatedApp({
 		}
 	}, [sessionInfo, currentRoute, setCurrentRoute]);
 
-	// Loading state - Added userCheck condition
+	// Loading state - Show while syncing
 	if (
 		!user ||
 		userCheck === undefined ||
-		(userCheck!.needsSync && !syncAttempted) ||
+		syncInProgress ||
+		(userCheck?.needsSync && !syncAttempted) ||
 		sessionInfo === undefined ||
 		role === undefined ||
 		deviceCheck === undefined
@@ -319,9 +243,11 @@ function AuthenticatedApp({
 				<div className="text-center">
 					<div className="text-4xl mb-4">⏳</div>
 					<p className="text-gray-600">
-						{userCheck?.needsSync
+						{syncInProgress
 							? 'Setting up your account...'
-							: 'Loading your profile...'}
+							: userCheck?.needsSync
+								? 'Restoring your profile...'
+								: 'Loading your profile...'}
 					</p>
 				</div>
 			</div>
@@ -352,9 +278,6 @@ function AuthenticatedApp({
 			</div>
 		);
 	}
-
-	// Show admin badge if user is accessing from unrestricted device
-	const isAdminBypass = deviceCheck.isAdmin;
 
 	// Handle kiosk mode
 	if (role?.isKiosk) {

@@ -1,11 +1,20 @@
 'use client';
-import {SignIn} from '@clerk/clerk-react';
+import {SignIn, SignUp} from '@clerk/clerk-react';
 import {useQuery} from 'convex/react';
 import {api} from '../convex/_generated/api';
+import {useEffect, useState} from 'react';
 
 export function SignInForm() {
 	// Check if admin exists - NO AUTH REQUIRED (public query)
 	const hasAdmin = useQuery(api.employees.hasAdminUser);
+	const [showSignUp, setShowSignUp] = useState(false);
+
+	// Reset to sign in when hasAdmin changes
+	useEffect(() => {
+		if (hasAdmin !== undefined) {
+			setShowSignUp(!hasAdmin); // Show signup only if no admin exists
+		}
+	}, [hasAdmin]);
 
 	// Show loading while checking
 	if (hasAdmin === undefined) {
@@ -41,33 +50,33 @@ export function SignInForm() {
 				</div>
 
 				{/* 
-          CONDITIONAL SIGNUP:
-          - If NO admin exists → Show SignIn WITH SignUp option (for first admin)
-          - If admin exists → Show SignIn ONLY (no signup for employees)
-        */}
-				<SignIn
-					routing="hash"
-					signUpUrl={hasAdmin ? undefined : '/sign-up'} // ← KEY LINE: Conditional signup
-				/>
-
-				{/* Info Message for Employees */}
-				{hasAdmin && (
-					<div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-						<p className="text-sm text-blue-800 text-center">
-							<strong>Employee?</strong> Please use the credentials provided by
-							your administrator.
-						</p>
-					</div>
-				)}
-
-				{/* Info Message for First Admin */}
-				{!hasAdmin && (
-					<div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-lg">
-						<p className="text-sm text-green-800 text-center">
-							<strong>First Time Setup:</strong> Create the first admin account
-							to get started.
-						</p>
-					</div>
+					CONDITIONAL SIGNUP:
+					- If NO admin exists → Show SignUp for first admin creation
+					- If admin exists → Show SignIn only (employees use credentials)
+				*/}
+				{!hasAdmin && showSignUp ? (
+					<>
+						<SignUp routing="hash" signInUrl="#" afterSignUpUrl="/" />
+						<div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-lg">
+							<p className="text-sm text-green-800 text-center">
+								<strong>First Time Setup:</strong> Create the first admin
+								account to get started.
+							</p>
+						</div>
+					</>
+				) : (
+					<>
+						<SignIn
+							routing="hash"
+							signUpUrl={undefined} // No signup option for employees
+						/>
+						<div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+							<p className="text-sm text-blue-800 text-center">
+								<strong>Employee?</strong> Please use the credentials provided
+								by your administrator.
+							</p>
+						</div>
+					</>
 				)}
 
 				{/* Footer */}
