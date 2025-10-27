@@ -14,19 +14,25 @@ http.route({
 	path: '/clerk-webhook',
 	method: 'POST',
 	handler: httpAction(async (ctx, request) => {
-		// Get headers
+		// Get the raw body first (before reading headers)
+		const payload = await request.text();
+
+		// Get Svix headers (note: these use hyphens in HTTP but we'll pass as underscores to match Convex args)
 		const svix_id = request.headers.get('svix-id');
 		const svix_timestamp = request.headers.get('svix-timestamp');
 		const svix_signature = request.headers.get('svix-signature');
 
+		console.log('📨 Received webhook request');
+		console.log('🔍 Headers:', {
+			svix_id,
+			svix_timestamp,
+			svix_signature: svix_signature ? 'present' : 'missing',
+		});
+
 		if (!svix_id || !svix_timestamp || !svix_signature) {
+			console.error('❌ Missing Svix headers');
 			return new Response('Missing svix headers', {status: 400});
 		}
-
-		// Get the raw body
-		const payload = await request.text();
-
-		console.log('📨 Received webhook request');
 
 		try {
 			// Call internal action to process webhook
