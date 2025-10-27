@@ -75,7 +75,7 @@ const applicationTables = {
 				v.literal('')
 			)
 		),
-		locations: v.optional(v.array(v.string())),
+		locations: v.optional(v.array(v.string())) || [],
 		assignedBy: v.optional(v.string()),
 		assignedAt: v.optional(v.number()),
 		teams: v.optional(v.array(v.string())),
