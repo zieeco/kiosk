@@ -33,7 +33,14 @@ export const handleClerkWebhook = internalAction({
 		const wh = new Webhook(webhookSecret);
 		let event: any;
 		try {
-			event = wh.verify(args.payload, args.headers);
+			// Svix library expects headers with hyphens as keys
+			const headers = {
+				'svix-id': args.headers.svix_id,
+				'svix-timestamp': args.headers.svix_timestamp,
+				'svix-signature': args.headers.svix_signature,
+			};
+
+			event = wh.verify(args.payload, headers);
 			console.log('✅ Webhook verified:', event.type);
 		} catch (err) {
 			console.error('❌ Webhook verification failed:', err);

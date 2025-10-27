@@ -164,12 +164,12 @@ export default function DeviceManagementWorkspace() {
 								</label>
 								<select
 									name="location"
-									required
+									// required
 									className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
 									<option value="">Select location</option>
 									{locations.map((loc) => (
-										<option key={loc._id} value={loc.name}>
-											{loc.name}
+										<option key={loc._id} value={loc.name || ''}>
+											{loc.name || ''}
 										</option>
 									))}
 								</select>

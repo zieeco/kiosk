@@ -325,17 +325,17 @@ export const syncLocationsFromStrings = mutation({
 	},
 	handler: async (ctx, args) => {
 		const identity = await ctx.auth.getUserIdentity();
-		if (!identity) {
-			throw new Error('Not authenticated');
-		}
+		if (!identity) return null;
 
-		const userRole = await ctx.db
+		const clerkUserId = identity.subject;
+		const role = await ctx.db
 			.query('roles')
-			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', identity.subject))
+			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', clerkUserId))
 			.first();
+		const userRole = role;
 
-			console.log('what is my user role?::', userRole);
-			console.log('what is my user role role?::', userRole!.role);
+			// console.log('what is my user role?::', userRole);
+			console.log('what is my user role role?::', userRole?.role);
 
 		if (!userRole || userRole.role !== 'admin') {
 			throw new Error('Unauthorized');

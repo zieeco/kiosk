@@ -469,8 +469,9 @@ export const linkUserToEmployee = mutation({
 
 /**
  * Create employee with Clerk account (admin only)
- * ✅ WEBHOOK-FIRST APPROACH: Webhook handles ALL record creation
- * ✅ This action only creates Clerk user and waits for webhook to sync
+ * ✅ WEBHOOK-ONLY APPROACH: Webhook handles ALL record creation
+ * ✅ This action creates Clerk user and waits for webhook to complete
+ * ✅ No fallback - relies entirely on webhook
  */
 export const createEmployee = action({
 	args: {
@@ -496,7 +497,7 @@ export const createEmployee = action({
 		if (!identity) throw new Error('Not authenticated');
 		const adminClerkUserId = identity.subject;
 
-		// Check if employee with this email already exists in Convex
+		// Check if employee with this email already exists
 		const existingEmployee = await ctx.runQuery(
 			internal.employees.getEmployeeByEmail,
 			{email: args.email}
@@ -525,25 +526,24 @@ export const createEmployee = action({
 				assignedDeviceId: args.assignedDeviceId,
 			});
 		} catch (error) {
-			console.error('Failed to create Clerk user:', error);
+			console.error('❌ Failed to create Clerk user:', error);
 			throw new Error(
 				`Failed to create employee account: ${error instanceof Error ? error.message : String(error)}`
 			);
 		}
 
 		if (!clerkUser || !clerkUser.clerkUserId) {
-			throw new Error('Failed to get Clerk user ID after creation.');
+			throw new Error('Failed to get Clerk user ID after creation');
 		}
 		const clerkUserId = clerkUser.clerkUserId;
 
 		console.log('✅ Clerk user created:', clerkUserId);
 
 		// ✅ STEP 2: Wait for webhook to create employee record
-		// Poll for employee record (with timeout)
 		console.log('⏳ Waiting for webhook to create employee record...');
-		let employee;
+		let employee = null;
 		let attempts = 0;
-		const maxAttempts = 15; // 15 seconds max wait time
+		const maxAttempts = 20; // 20 seconds max wait time
 
 		while (attempts < maxAttempts) {
 			employee = await ctx.runQuery(
@@ -562,36 +562,14 @@ export const createEmployee = action({
 			console.log(`⏳ Attempt ${attempts}/${maxAttempts}...`);
 		}
 
-		// ✅ STEP 3: If webhook didn't create record, create it manually as fallback
+		// ✅ STEP 3: Verify webhook created the employee
 		if (!employee) {
-			console.warn(
-				'⚠️  Webhook did not create employee record in time, creating manually as fallback'
+			console.error(
+				'❌ Webhook failed to create employee record within timeout period'
 			);
-			const employeeId = await ctx.runMutation(
-				internal.employees.insertEmployeeAndRole,
-				{
-					name: args.name,
-					email: args.email,
-					workEmail: args.email,
-					role: args.role,
-					locations: args.locations,
-					clerkUserId: clerkUserId,
-					adminClerkUserId: adminClerkUserId,
-					assignedDeviceId: args.assignedDeviceId,
-				}
+			throw new Error(
+				'Webhook did not create employee record. Please check webhook configuration and try again.'
 			);
-
-			// Fetch the newly created employee
-			employee = await ctx.runQuery(
-				internal.employees.getEmployeeByClerkUserId,
-				{clerkUserId}
-			);
-
-			if (!employee) {
-				throw new Error('Failed to create employee record');
-			}
-
-			console.log('✅ Fallback: Employee record created manually:', employeeId);
 		}
 
 		// ✅ STEP 4: Log audit
@@ -619,7 +597,7 @@ export const createEmployee = action({
 				args.email
 			);
 		} catch (error) {
-			console.error('Failed to schedule welcome email:', error);
+			console.error('❌ Failed to schedule welcome email:', error);
 			// Don't throw - account was created successfully
 		}
 
@@ -631,79 +609,13 @@ export const createEmployee = action({
 	},
 });
 
-// Internal mutation to insert employee and role (called by createEmployee action as fallback)
-export const insertEmployeeAndRole = internalMutation({
-	args: {
-		name: v.string(),
-		email: v.string(),
-		workEmail: v.string(),
-		role: v.union(
-			v.literal('admin'),
-			v.literal('supervisor'),
-			v.literal('staff')
-		),
-		locations: v.array(v.string()),
-		clerkUserId: v.string(),
-		adminClerkUserId: v.string(),
-		assignedDeviceId: v.optional(v.string()),
-	},
-	handler: async (ctx, args) => {
-		// Check if employee already exists (avoid duplicates)
-		const existingEmployee = await ctx.db
-			.query('employees')
-			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', args.clerkUserId))
-			.first();
-
-		if (existingEmployee) {
-			console.log('ℹ️  Employee already exists, skipping creation');
-			return existingEmployee._id;
-		}
-
-		// Create employee record
-		const employeeId = await ctx.db.insert('employees', {
-			name: args.name,
-			email: args.email,
-			workEmail: args.workEmail,
-			role: args.role,
-			locations: args.locations,
-			clerkUserId: args.clerkUserId,
-			employmentStatus: 'active',
-			assignedDeviceId: args.assignedDeviceId,
-			createdAt: Date.now(),
-			createdBy: args.adminClerkUserId,
-			onboardedBy: args.adminClerkUserId,
-			onboardedAt: Date.now(),
-		});
-
-		// Check if role already exists (avoid duplicates)
-		const existingRole = await ctx.db
-			.query('roles')
-			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', args.clerkUserId))
-			.first();
-
-		if (!existingRole) {
-			await ctx.db.insert('roles', {
-				clerkUserId: args.clerkUserId,
-				role: args.role,
-				locations: args.locations,
-				assignedBy: args.adminClerkUserId,
-				assignedAt: Date.now(),
-			});
-		}
-
-		console.log('✅ Employee and role records created');
-
-		return employeeId;
-	},
-});
-
 // ============================================================================
 // EMPLOYEE CRUD - UPDATE
 // ============================================================================
 
 /**
  * Update employee (admin only)
- * ✅ FIXED: Also updates Clerk metadata
+ * ✅ Updates both Convex and Clerk metadata
  */
 export const updateEmployee = mutation({
 	args: {
@@ -754,7 +666,7 @@ export const updateEmployee = mutation({
 				});
 			}
 
-			// ✅ NEW: Update Clerk metadata so it stays in sync
+			// Update Clerk metadata to keep in sync
 			try {
 				await ctx.scheduler.runAfter(
 					0,
@@ -768,7 +680,7 @@ export const updateEmployee = mutation({
 				);
 				console.log('✅ Scheduled Clerk metadata update');
 			} catch (error) {
-				console.error('Failed to schedule Clerk metadata update:', error);
+				console.error('❌ Failed to schedule Clerk metadata update:', error);
 				// Don't throw - local update succeeded
 			}
 		}
@@ -902,9 +814,9 @@ export const deleteEmployee = mutation({
 				await ctx.scheduler.runAfter(0, internal.clerkActions.deleteClerkUser, {
 					clerkUserId: linkedClerkUserId,
 				});
-				console.log('Scheduled deletion of Clerk user:', linkedClerkUserId);
+				console.log('✅ Scheduled deletion of Clerk user:', linkedClerkUserId);
 			} catch (error) {
-				console.error('Failed to schedule Clerk user deletion:', error);
+				console.error('❌ Failed to schedule Clerk user deletion:', error);
 			}
 		}
 
