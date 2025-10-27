@@ -12,6 +12,7 @@ import CarePortal from './components/CarePortal';
 import PendingPage from './components/PendingPage';
 import {useEffect, useState} from 'react';
 import {getDeviceId, initializeDeviceId} from './lib/device';
+import {SignInForm} from './SignInForm';
 
 function App() {
 	const urlParams = new URLSearchParams(window.location.search);
@@ -90,40 +91,7 @@ function App() {
 				/>
 			</SignedIn>
 			<SignedOut>
-				<div className="flex items-center justify-center min-h-screen bg-gray-50">
-					<div className="w-full max-w-md">
-						{/* Logo Section */}
-						<div className="flex justify-center mb-6">
-							<img
-								src="/logo.png"
-								alt="El-Elyon Properties LLC Logo"
-								className="h-16 w-auto"
-								onError={(e) => {
-									e.currentTarget.style.display = 'none';
-									const fallback = e.currentTarget
-										.nextElementSibling as HTMLElement;
-									if (fallback) fallback.classList.remove('hidden');
-								}}
-							/>
-							<div className="text-3xl font-bold hidden">
-								<span className="text-black">El-Elyon</span>
-								<span className="text-blue-600"> Properties LLC</span>
-							</div>
-						</div>
-
-						<SignIn routing="hash" signUpUrl={undefined} />
-
-						{/* Footer */}
-						<div className="mt-6 text-center">
-							<p className="text-xs text-gray-500">
-								powered by{' '}
-								<span className="font-semibold text-gray-700">
-									Bold Ideas Innovations Ltd
-								</span>
-							</p>
-						</div>
-					</div>
-				</div>
+				<SignInForm />
 			</SignedOut>
 		</>
 	);
@@ -183,7 +151,7 @@ function AuthenticatedApp({
 	// Record device usage when user logs in successfully
 	const recordUsage = useMutation(api.devices.recordDeviceUsage);
 	const currentUser = useQuery(api.users.getCurrentUser);
-	
+
 	// Debug logging
 	useEffect(() => {
 		if (user?.id) {
