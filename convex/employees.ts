@@ -3,7 +3,6 @@ import {
 	query,
 	action,
 	internalQuery,
-	MutationCtx,
 	internalMutation,
 } from './_generated/server';
 import {v} from 'convex/values';
@@ -86,7 +85,6 @@ async function requireAdmin(ctx: {db: any}, clerkUserId: string) {
 
 /**
  * Check if any admin user exists in the system
- * Used to determine if SignUp should be visible
  * PUBLIC QUERY - No auth required (for login page)
  */
 export const hasAdminUser = query({
@@ -476,7 +474,8 @@ export const linkUserToEmployee = mutation({
 
 /**
  * Create employee with Clerk account (admin only)
- * Admin creates the full account - employee receives credentials via email
+ * ✅ FIXED: No longer creates employee record directly
+ * ✅ Webhook handles ALL record creation after Clerk user is made
  */
 export const createEmployee = action({
 	args: {
@@ -495,7 +494,6 @@ export const createEmployee = action({
 		args
 	): Promise<{
 		success: boolean;
-		employeeId: Id<'employees'>;
 		clerkUserId: string;
 		generatedPassword: string;
 	}> => {
@@ -514,11 +512,12 @@ export const createEmployee = action({
 		}
 
 		// Generate a secure random password
-		const generatedPassword = generatePassword(16); // Longer for security
+		const generatedPassword = generatePassword(16);
 
 		console.log('🔐 Creating Clerk user for:', args.email);
 
-		// Create user in Clerk via Convex action
+		// ✅ KEY FIX: Create Clerk user with metadata
+		// Webhook will automatically create employee/role records
 		let clerkUser;
 		try {
 			clerkUser = await ctx.runAction(internal.clerkActions.createClerkUser, {
@@ -526,6 +525,9 @@ export const createEmployee = action({
 				password: generatedPassword,
 				firstName: args.name.split(' ')[0] || '',
 				lastName: args.name.split(' ').slice(1).join(' ') || '',
+				role: args.role,
+				locations: args.locations,
+				assignedDeviceId: args.assignedDeviceId,
 			});
 		} catch (error) {
 			console.error('Failed to create Clerk user:', error);
@@ -541,7 +543,8 @@ export const createEmployee = action({
 
 		console.log('✅ Clerk user created:', clerkUserId);
 
-		// Store employee record in Convex, linked to Clerk user
+		// ✅ CREATE EMPLOYEE DIRECTLY (Don't wait for webhook)
+		// Webhook will update if needed, but we create now for immediate email sending
 		const employeeId = await ctx.runMutation(
 			internal.employees.insertEmployeeAndRole,
 			{
@@ -558,6 +561,7 @@ export const createEmployee = action({
 
 		console.log('✅ Employee record created:', employeeId);
 
+		// Log audit
 		await ctx.runMutation(internal.audit.log, {
 			clerkUserId: adminClerkUserId,
 			event: 'create_employee',
@@ -588,9 +592,8 @@ export const createEmployee = action({
 
 		return {
 			success: true,
-			employeeId,
 			clerkUserId: clerkUserId,
-			generatedPassword, // Return for admin to see (optional)
+			generatedPassword,
 		};
 	},
 });
@@ -611,19 +614,7 @@ export const insertEmployeeAndRole = internalMutation({
 		adminClerkUserId: v.string(),
 		assignedDeviceId: v.optional(v.string()),
 	},
-	handler: async (
-		ctx: MutationCtx,
-		args: {
-			name: string;
-			email: string;
-			workEmail: string;
-			role: 'admin' | 'supervisor' | 'staff';
-			locations: string[];
-			clerkUserId: string;
-			adminClerkUserId: string;
-			assignedDeviceId?: string;
-		}
-	) => {
+	handler: async (ctx, args) => {
 		const employeeId = await ctx.db.insert('employees', {
 			name: args.name,
 			email: args.email,
@@ -653,27 +644,14 @@ export const insertEmployeeAndRole = internalMutation({
 	},
 });
 
-// Internal query to get employee by email (for createEmployee action)
-export const getEmployeeByEmail = internalQuery({
-	args: {email: v.string()},
-	handler: async (ctx, args) => {
-		return await ctx.db
-			.query('employees')
-			.filter((q) =>
-				q.or(
-					q.eq(q.field('email'), args.email),
-					q.eq(q.field('workEmail'), args.email)
-				)
-			)
-			.first();
-	},
-});
-
 // ============================================================================
 // EMPLOYEE CRUD - UPDATE
 // ============================================================================
 
-// Mutation: Update employee (admin only)
+/**
+ * Update employee (admin only)
+ * ✅ FIXED: Also updates Clerk metadata
+ */
 export const updateEmployee = mutation({
 	args: {
 		employeeId: v.id('employees'),
@@ -722,6 +700,24 @@ export const updateEmployee = mutation({
 					locations: args.locations,
 				});
 			}
+
+			// ✅ NEW: Update Clerk metadata so it stays in sync
+			try {
+				await ctx.scheduler.runAfter(
+					0,
+					internal.clerkActions.updateClerkMetadata,
+					{
+						clerkUserId: employee.clerkUserId,
+						role: args.role,
+						locations: args.locations,
+						assignedDeviceId: args.assignedDeviceId,
+					}
+				);
+				console.log('✅ Scheduled Clerk metadata update');
+			} catch (error) {
+				console.error('Failed to schedule Clerk metadata update:', error);
+				// Don't throw - local update succeeded
+			}
 		}
 
 		await audit(
@@ -738,7 +734,9 @@ export const updateEmployee = mutation({
 // EMPLOYEE CRUD - DELETE
 // ============================================================================
 
-// Mutation: Delete employee with cascade (admin only)
+/**
+ * Delete employee with cascade (admin only)
+ */
 export const deleteEmployee = mutation({
 	args: {employeeId: v.id('employees')},
 	handler: async (ctx, args) => {
@@ -887,5 +885,43 @@ export const getEmployeeForEmail = internalQuery({
 			role: employee.role || 'staff',
 			locations: employee.locations || [],
 		};
+	},
+});
+
+// Internal query to get employee by email (for createEmployee action)
+export const getEmployeeByEmail = internalQuery({
+	args: {email: v.string()},
+	handler: async (ctx, args) => {
+		return await ctx.db
+			.query('employees')
+			.filter((q) =>
+				q.or(
+					q.eq(q.field('email'), args.email),
+					q.eq(q.field('workEmail'), args.email)
+				)
+			)
+			.first();
+	},
+});
+
+// Internal query to get employee by Clerk user ID
+export const getEmployeeByClerkUserId = internalQuery({
+	args: {clerkUserId: v.string()},
+	handler: async (ctx, args) => {
+		return await ctx.db
+			.query('employees')
+			.withIndex('by_clerkUserId', (q) => q.eq('clerkUserId', args.clerkUserId))
+			.first();
+	},
+});
+
+// Internal query to check if any admins exist
+export const checkForAdmins = internalQuery({
+	args: {},
+	handler: async (ctx) => {
+		return await ctx.db
+			.query('roles')
+			.filter((q) => q.eq(q.field('role'), 'admin'))
+			.collect();
 	},
 });
